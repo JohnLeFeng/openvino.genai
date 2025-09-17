@@ -13,6 +13,11 @@ import openvino as ov
 logging.basicConfig(format='[ %(levelname)s ] %(message)s', level=logging.INFO, stream=sys.stdout) 
 log = logging.getLogger()
 
+compression_precision = {
+    "INT4_SYM": nncf.CompressWeightsMode.INT4_SYM,
+    "NF4": nncf.CompressWeightsMode.NF4,
+}
+
 
 def parse_args() -> argparse.Namespace:
     """Parse and return command line arguments."""
@@ -27,11 +32,13 @@ def parse_args() -> argparse.Namespace:
                       help='Optional. Group size and default is 64.')
     args.add_argument('-r','--ratio',type = float, default = 1.0, required = False,
                       help='Optional. Compression ratio and default is 1.0.')
+    args.add_argument('-p','--precision',type = str, default = "INT4_SYM", required = False,
+                      help='Optional. Compression precision and default is "INT4_SYM".')
     return parser.parse_args()
 
 
-def compress_lm_weights(model_dir, group_size, ratio):
-    compression_configuration = {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": group_size, "ratio": ratio, "all_layers": True}
+def compress_lm_weights(model_dir, precision="INT4_SYM", group_size=64, ratio=1.0):
+    compression_configuration = {"mode": compression_precision[precision], "group_size": group_size, "ratio": ratio, "all_layers": True}
     ov_model_path = model_dir / "openvino_language_model.xml"
     ov_int4_model_path = model_dir / "openvino_language_model_int4.xml"
     ov_model = ov.Core().read_model(ov_model_path)
@@ -52,9 +59,10 @@ def main():
     model_dir = Path(args.model)
     group_size = args.group_size
     ratio = args.ratio
+    precision = args.precision
     
     log.info(f"Compressing language model in {model_dir} with group size {group_size} and ratio {ratio}")
-    compress_lm_weights(model_dir, group_size, ratio)
+    compress_lm_weights(model_dir, precision=precision, group_size=group_size, ratio=ratio)
     log.info("Language model compression is done.")
 
 
