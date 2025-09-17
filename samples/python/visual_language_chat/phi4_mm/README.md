@@ -12,12 +12,22 @@
 
     * Apply group compression
 
-        ```sh
-        python compress_lm.py -m Phi-4-multimodal-instruct-ov -gs 64
-        ```
-    
+        * INT4_SYM
+
+            ```sh
+            python compress_lm.py -m Phi-4-multimodal-instruct-ov -gs 64
+            ```
+
     * Apply channel-wise quantization
 
-        ```sh
-        python compress_lm.py -m Phi-4-multimodal-instruct-ov -gs -1
-        ```
+        * INT4_SYM
+
+            ```sh
+            python compress_lm.py -m Phi-4-multimodal-instruct-ov -gs -1
+            ```
+        
+        * NF4
+
+            ```sh
+            python compress_lm.py -m Phi-4-multimodal-instruct-ov -gs -1 -p NF4
+            ```
