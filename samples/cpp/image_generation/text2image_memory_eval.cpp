@@ -44,15 +44,15 @@ public:
     }
 
     void load_model(const std::string models_path, const std::string device) {
-        ov::AnyMap enable_compile_cache;
+        ov::AnyMap properties = {
+            {"ENABLE_MMAP", false}
+        };
         if (device == "GPU") {
-            // Cache compiled models on disk for GPU to save time on the
-            // next run. It's not beneficial for CPU.
-            enable_compile_cache.insert({ov::cache_dir("cache")});
+            properties.insert({ov::cache_dir("cache")});
         }
         if (!t2i_pipeline) {
-            std::cout << "initial t2i pipeline.\n";
-            t2i_pipeline = std::make_unique<ov::genai::Text2ImagePipeline>(models_path, device, enable_compile_cache);
+            std::cout << "Wrapper - Initial t2i pipeline.\n";
+            t2i_pipeline = std::make_unique<ov::genai::Text2ImagePipeline>(models_path, device, properties);
         }
     }
 
@@ -80,7 +80,7 @@ public:
         t2i_pipeline.reset();
         t2i_pipeline.release();
         if (!t2i_pipeline) {
-            std::cout << "t2i_pipeline is nullptr.\n";
+            std::cout << "Wrapper - t2i pipeline is nullptr.\n";
         }
     }
 
@@ -90,10 +90,26 @@ private:
 
 
 int32_t main(int32_t argc, char* argv[]) try {
-    OPENVINO_ASSERT(argc >= 3, "Usage: ", argv[0], " <MODEL_DIR> '<PROMPT>' [<DEVICE>]");
+    OPENVINO_ASSERT(argc >= 4, "Usage: ", argv[0], " <MODEL_DIR> '<PROMPT>' <DISABLE_PRIMITIVE_CACHE:0;ENABLE_PRIMITIVE_CACHE:others> [<DEVICE>]");
 
     const std::string models_path = argv[1], prompt = argv[2];
-    const std::string device = (argc == 4) ? argv[3] : "GPU";
+    const int ONEDNN_CACHE = std::stoi(argv[3]);
+
+    switch (ONEDNN_CACHE) {
+        case 0:
+            std::cout << "Disable OneDNN PRIMITIVE CACHE." << std::endl;
+            if (_putenv("ONEDNN_ENABLE_PRIMITIVE_CACHE=OFF") != 0) {
+                throw std::runtime_error("Failed to set environment variable.");
+            }
+            if (_putenv("ONEDNN_PRIMITIVE_CACHE_CAPACITY=0") != 0) {
+                throw std::runtime_error("Failed to set environment variable.");
+            }
+            break;
+        default:
+            std::cout << "Enable OneDNN PRIMITIVE CACHE." << std::endl;
+    }
+        
+    const std::string device = (argc == 5) ? argv[4] : "GPU";
 
     // 
     // Original sample
@@ -135,14 +151,12 @@ int32_t main(int32_t argc, char* argv[]) try {
     t2iPipe.release();
     printMemoryUsage("Done");
 
-    std::this_thread::sleep_for(std::chrono::seconds(10));
-    printMemoryUsage("Release Text2Image Pipeline after 10 seconds");
 
-    std::this_thread::sleep_for(std::chrono::seconds(10));
-    printMemoryUsage("Release Text2Image Pipeline after 20 seconds");
-
-    std::this_thread::sleep_for(std::chrono::seconds(10));
-    printMemoryUsage("Release Text2Image Pipeline after 30 seconds");
+    for (int i = 0; i < 12; ++i) {
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+        std::string delay_msg = "Release Text2Image Pipeline after " + std::to_string(i * 5 + 5) + " seconds";
+        printMemoryUsage(delay_msg);
+    }
 
     std::cout << std::endl << "Re-initial ..." << std::endl << std::endl;
 
@@ -158,14 +172,11 @@ int32_t main(int32_t argc, char* argv[]) try {
     t2iPipe.release();
     printMemoryUsage("Done");
 
-    std::this_thread::sleep_for(std::chrono::seconds(10));
-    printMemoryUsage("Release Text2Image Pipeline after 10 seconds");
-
-    std::this_thread::sleep_for(std::chrono::seconds(10));
-    printMemoryUsage("Release Text2Image Pipeline after 20 seconds");
-
-    std::this_thread::sleep_for(std::chrono::seconds(10));
-    printMemoryUsage("Release Text2Image Pipeline after 30 seconds");
+    for (int i = 0; i < 12; ++i) {
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+        std::string delay_msg = "Release Text2Image Pipeline after " + std::to_string(i * 5 + 5) + " seconds";
+        printMemoryUsage(delay_msg);
+    }
 
     return EXIT_SUCCESS;
 } catch (const std::exception& error) {
