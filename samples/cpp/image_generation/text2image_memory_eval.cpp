@@ -14,6 +14,8 @@
 
 #include <thread>
 
+#include <tlhelp32.h>
+
 size_t getCurrentRSS() {
     PROCESS_MEMORY_COUNTERS pmc;
     if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
@@ -34,6 +36,42 @@ void printMemoryUsage(const std::string& stage) {
 }
 
 
+void PrintLoadedDlls() {
+    // Get the process ID of the current process.
+    DWORD currentProcessId = GetCurrentProcessId();
+
+    // 1. Create a snapshot of all modules in the current process.
+    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, currentProcessId);
+
+    if (hSnapshot == INVALID_HANDLE_VALUE) {
+        std::cerr << "Error: CreateToolhelp32Snapshot failed. Code: " << GetLastError() << std::endl;
+        return;
+    }
+
+    // 2. Initialize the MODULEENTRY32 structure.
+    // You must set the dwSize member before calling Module32First.
+    MODULEENTRY32 moduleEntry;
+    moduleEntry.dwSize = sizeof(MODULEENTRY32);
+
+    // 3. Get information about the first module (the .exe itself).
+    if (Module32First(hSnapshot, &moduleEntry)) {
+        std::cout << "--- Loaded Modules ---" << std::endl;
+        do {
+            // szExePath contains the full path to the module.
+            // On Windows, paths can contain backslashes, so we print it directly.
+            // Using std::wstring for wider compatibility with Windows paths.
+            std::wcout << L"  " << moduleEntry.szExePath << std::endl;
+
+        } while (Module32Next(hSnapshot, &moduleEntry)); // 4. Loop through the rest of the modules.
+    } else {
+        std::cerr << "Error: Module32First failed. Code: " << GetLastError() << std::endl;
+    }
+
+    // 5. Clean up and close the snapshot handle.
+    CloseHandle(hSnapshot);
+}
+
+
 class t2iPipeline
 {
 public:
@@ -45,7 +83,8 @@ public:
 
     void load_model(const std::string models_path, const std::string device) {
         ov::AnyMap properties = {
-            {"ENABLE_MMAP", false}
+            {"ENABLE_MMAP", true}
+            // {"ENABLE_MMAP", false}
         };
         if (device == "GPU") {
             properties.insert({ov::cache_dir("cache")});
@@ -147,18 +186,22 @@ int32_t main(int32_t argc, char* argv[]) try {
     printMemoryUsage("Initial Text2Image Pipeline Wrapper ...");
     t2iPipeline t2iPipe;
     printMemoryUsage("Done");
+    PrintLoadedDlls();
 
     printMemoryUsage("Load Text2Image Pipeline ...");
     t2iPipe.load_model(models_path, device);
     printMemoryUsage("Done");
+    PrintLoadedDlls();
 
     printMemoryUsage("Generate Text2Image Pipeline ...");
     t2iPipe.generate(prompt);
     printMemoryUsage("Done");
+    PrintLoadedDlls();
 
     printMemoryUsage("Release Text2Image Pipeline ...");
     t2iPipe.release();
     printMemoryUsage("Done");
+    PrintLoadedDlls();
 
 
     for (int i = 0; i < 12; ++i) {
@@ -166,26 +209,31 @@ int32_t main(int32_t argc, char* argv[]) try {
         std::string delay_msg = "Release Text2Image Pipeline after " + std::to_string(i * 5 + 5) + " seconds";
         printMemoryUsage(delay_msg);
     }
+    PrintLoadedDlls();
 
     std::cout << std::endl << "Re-initial ..." << std::endl << std::endl;
 
     printMemoryUsage("Load Text2Image Pipeline ...");
     t2iPipe.load_model(models_path, device);
     printMemoryUsage("Done");
+    PrintLoadedDlls();
 
     printMemoryUsage("Generate Text2Image Pipeline ...");
     t2iPipe.generate(prompt);
     printMemoryUsage("Done");
+    PrintLoadedDlls();
 
     printMemoryUsage("Release Text2Image Pipeline ...");
     t2iPipe.release();
     printMemoryUsage("Done");
+    PrintLoadedDlls();
 
     for (int i = 0; i < 12; ++i) {
         std::this_thread::sleep_for(std::chrono::seconds(5));
         std::string delay_msg = "Release Text2Image Pipeline after " + std::to_string(i * 5 + 5) + " seconds";
         printMemoryUsage(delay_msg);
     }
+    PrintLoadedDlls();
 
     return EXIT_SUCCESS;
 } catch (const std::exception& error) {
