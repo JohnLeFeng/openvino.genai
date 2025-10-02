@@ -90,7 +90,7 @@ private:
 
 
 int32_t main(int32_t argc, char* argv[]) try {
-    OPENVINO_ASSERT(argc >= 4, "Usage: ", argv[0], " <MODEL_DIR> '<PROMPT>' <DISABLE_PRIMITIVE_CACHE:0;ENABLE_PRIMITIVE_CACHE:others> [<DEVICE>]");
+    OPENVINO_ASSERT(argc >= 4, "Usage: ", argv[0], " <MODEL_DIR> '<PROMPT>' \n\t\t<DISABLE_PRIMITIVE_CACHE:0;ENABLE_PRIMITIVE_CACHE, but set CACHE CAPACITY as 0:1;default:others> \n\t\t[<DEVICE>]");
 
     const std::string models_path = argv[1], prompt = argv[2];
     const int ONEDNN_CACHE = std::stoi(argv[3]);
@@ -99,6 +99,15 @@ int32_t main(int32_t argc, char* argv[]) try {
         case 0:
             std::cout << "Disable OneDNN PRIMITIVE CACHE." << std::endl;
             if (_putenv("ONEDNN_ENABLE_PRIMITIVE_CACHE=OFF") != 0) {
+                throw std::runtime_error("Failed to set environment variable.");
+            }
+            if (_putenv("ONEDNN_PRIMITIVE_CACHE_CAPACITY=0") != 0) {
+                throw std::runtime_error("Failed to set environment variable.");
+            }
+            break;
+        case 1:
+            std::cout << "Enable OneDNN PRIMITIVE CACHE, but set CACHE CAPACITY as 0." << std::endl;
+            if (_putenv("ONEDNN_ENABLE_PRIMITIVE_CACHE=ON") != 0) {
                 throw std::runtime_error("Failed to set environment variable.");
             }
             if (_putenv("ONEDNN_PRIMITIVE_CACHE_CAPACITY=0") != 0) {
