@@ -44,9 +44,15 @@ public:
     }
 
     void load_model(const std::string models_path, const std::string device) {
+        ov::AnyMap enable_compile_cache;
+        if (device == "GPU") {
+            // Cache compiled models on disk for GPU to save time on the
+            // next run. It's not beneficial for CPU.
+            enable_compile_cache.insert({ov::cache_dir("cache")});
+        }
         if (!t2i_pipeline) {
             std::cout << "initial t2i pipeline.\n";
-            t2i_pipeline = std::make_unique<ov::genai::Text2ImagePipeline>(models_path, device);
+            t2i_pipeline = std::make_unique<ov::genai::Text2ImagePipeline>(models_path, device, enable_compile_cache);
         }
     }
 
@@ -92,35 +98,65 @@ int32_t main(int32_t argc, char* argv[]) try {
     // 
     // Original sample
     // 
-    // printMemoryUsage("Initial Text2Image Pipeline");
+    // printMemoryUsage("Initial Text2Image Pipeline ...");
     // ov::genai::Text2ImagePipeline pipe(models_path, device);
+    // printMemoryUsage("Done");
 
-    // printMemoryUsage("Run Text2Image generation");
+    // printMemoryUsage("Run Text2Image generation ...");
     // ov::Tensor image = pipe.generate(prompt,
     //     ov::genai::width(512),
     //     ov::genai::height(512),
     //     ov::genai::num_inference_steps(20),
     //     ov::genai::num_images_per_prompt(1),
     //     ov::genai::callback(progress_bar));
+    // printMemoryUsage("Done");
 
-    // printMemoryUsage("Run save image");
+    // printMemoryUsage("Run save image ...");
     // // writes `num_images_per_prompt` images by pattern name
     // imwrite("image_%d.bmp", image, true);
+    // printMemoryUsage("Done");
 
     // 
     // Use unique pointer 
     // 
-    printMemoryUsage("Initial Text2Image Pipeline Wrapper");
+    printMemoryUsage("Initial Text2Image Pipeline Wrapper ...");
     t2iPipeline t2iPipe;
+    printMemoryUsage("Done");
 
-    printMemoryUsage("Load Text2Image Pipeline");
+    printMemoryUsage("Load Text2Image Pipeline ...");
     t2iPipe.load_model(models_path, device);
+    printMemoryUsage("Done");
 
-    printMemoryUsage("Generate Text2Image Pipeline");
+    printMemoryUsage("Generate Text2Image Pipeline ...");
     t2iPipe.generate(prompt);
+    printMemoryUsage("Done");
 
-    printMemoryUsage("Release Text2Image Pipeline");
+    printMemoryUsage("Release Text2Image Pipeline ...");
     t2iPipe.release();
+    printMemoryUsage("Done");
+
+    std::this_thread::sleep_for(std::chrono::seconds(10));
+    printMemoryUsage("Release Text2Image Pipeline after 10 seconds");
+
+    std::this_thread::sleep_for(std::chrono::seconds(10));
+    printMemoryUsage("Release Text2Image Pipeline after 20 seconds");
+
+    std::this_thread::sleep_for(std::chrono::seconds(10));
+    printMemoryUsage("Release Text2Image Pipeline after 30 seconds");
+
+    std::cout << std::endl << "Re-initial ..." << std::endl << std::endl;
+
+    printMemoryUsage("Load Text2Image Pipeline ...");
+    t2iPipe.load_model(models_path, device);
+    printMemoryUsage("Done");
+
+    printMemoryUsage("Generate Text2Image Pipeline ...");
+    t2iPipe.generate(prompt);
+    printMemoryUsage("Done");
+
+    printMemoryUsage("Release Text2Image Pipeline ...");
+    t2iPipe.release();
+    printMemoryUsage("Done");
 
     std::this_thread::sleep_for(std::chrono::seconds(10));
     printMemoryUsage("Release Text2Image Pipeline after 10 seconds");
