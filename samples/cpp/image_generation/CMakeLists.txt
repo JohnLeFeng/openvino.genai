@@ -54,6 +54,22 @@ install(TARGETS text2image_memory_eval
         COMPONENT samples_bin
         EXCLUDE_FROM_ALL)
 
+# create text2image_memory_eval_long_run sample executable
+
+add_executable(text2image_memory_eval_long_run text2image_memory_eval_long_run.cpp imwrite.cpp)
+
+target_include_directories(text2image_memory_eval_long_run PRIVATE ${CMAKE_BINARY_DIR} "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(text2image_memory_eval_long_run PRIVATE openvino::genai indicators::indicators)
+
+set_target_properties(text2image_memory_eval_long_run PROPERTIES
+    # Ensure out of box LC_RPATH on macOS with SIP
+    INSTALL_RPATH_USE_LINK_PATH ON)
+
+install(TARGETS text2image_memory_eval_long_run
+        RUNTIME DESTINATION samples_bin/
+        COMPONENT samples_bin
+        EXCLUDE_FROM_ALL)
+
 # create text2image concurrent sample executable
 
 add_executable(text2image_concurrency text2image_concurrency.cpp imwrite.cpp)
