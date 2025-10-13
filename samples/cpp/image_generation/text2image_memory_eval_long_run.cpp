@@ -131,11 +131,10 @@ private:
 
 
 int32_t main(int32_t argc, char* argv[]) try {
-    OPENVINO_ASSERT(argc >= 3, "Usage: ", argv[0], " <MODEL_DIR> '<PROMPT>' [<DEVICE>]");
+    OPENVINO_ASSERT(argc >= 4, "Usage: ", argv[0], " <MODEL_DIR> '<PROMPT>' <DEVICE> <ITERS>");
 
-    const std::string models_path = argv[1], prompt = argv[2];
-        
-    const std::string device = (argc == 4) ? argv[3] : "GPU";
+    const std::string models_path = argv[1], prompt = argv[2], device = argv[3];
+    const int niters = (argc == 5) ? std::stoi(argv[4]) : 100;
 
     // 
     // Original sample
@@ -161,7 +160,7 @@ int32_t main(int32_t argc, char* argv[]) try {
     // 
     // Use unique pointer 
     // 
-    for (int i = 0; i < 1000; ++i) {
+    for (int i = 0; i < niters; ++i) {
         t2iPipeline t2iPipe;
         t2iPipe.load_model(models_path, device);
         t2iPipe.generate(prompt);
