@@ -88,6 +88,24 @@ install(TARGETS heterogeneous_stable_diffusion
         COMPONENT samples_bin
         EXCLUDE_FROM_ALL)
 
+# create heterogeneous_stable_diffusion_callback sample executable
+
+add_executable(heterogeneous_stable_diffusion_callback
+    heterogeneous_stable_diffusion_callback.cpp
+    imwrite.cpp)
+
+target_include_directories(heterogeneous_stable_diffusion_callback PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(heterogeneous_stable_diffusion_callback PRIVATE openvino::genai indicators::indicators)
+
+set_target_properties(heterogeneous_stable_diffusion_callback PROPERTIES
+    # Ensure out of box LC_RPATH on macOS with SIP
+    INSTALL_RPATH_USE_LINK_PATH ON)
+
+install(TARGETS heterogeneous_stable_diffusion_callback
+        RUNTIME DESTINATION samples_bin/
+        COMPONENT samples_bin
+        EXCLUDE_FROM_ALL)
+
 # create image2image sample executable
 
 add_executable(image2image image2image.cpp load_image.cpp imwrite.cpp)
