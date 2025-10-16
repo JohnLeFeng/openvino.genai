@@ -47,7 +47,6 @@ def main():
     # use_callback = True
     use_callback = False
 
-
     log.info(f"text encoder is running on {args.text_encoder_device}.")
     log.info(f"unet is running on {args.unet_device}.")
     log.info(f"vae decoder is running on {args.vae_decoder_device}.")
@@ -112,7 +111,8 @@ def main():
                 log.info("Add latent into intermediate latent buffer.")
                 intermediate_latent.put(latent)
             else:
-                log.info ("Skip, let pipeline do decode.")
+                log.info ("Skip, let pipeline do decode and stop thread.")
+                thread.join()
             return False
     
         s_time = time.time()
@@ -132,8 +132,6 @@ def main():
 
         image = Image.fromarray(image_tensor.data[0])
         image.save("image.bmp")
-
-        thread.join()
     else:
         s_time = time.time()
 
