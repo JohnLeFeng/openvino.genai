@@ -3,6 +3,7 @@
 
 #include <optional>
 #include <random>
+#include <iostream>
 
 #include "openvino/genai/visual_language/pipeline.hpp"
 #include "openvino/genai/visual_language/perf_metrics.hpp"
@@ -71,13 +72,45 @@ public:
         //     ov::device::properties("NPU", ...),
         //     ov::device::properties("CPU", ...)
         // }
-        auto device_propertes = utils::pop_or_default<ov::AnyMap>(
+        auto device_properties = utils::pop_or_default<ov::AnyMap>(
             properties_copy, ov::device::properties.name(), { }
         );
+        std::cerr << "[INFO] device_properties: " << ov::device::properties.name() << std::endl;
+        for (auto& item : device_properties) {
+            if (item.first == "NPU" || item.first == "GPU") {
+                std::cout << "  " << item.first << ": " << std::endl;
+                for (auto& item2 : item.second.as<ov::AnyMap>()) {
+                    std::cout << "    " << item2.first << ": " << item2.second.as<std::string>() << std::endl;
+                }
+            } else {
+                std::cout << "    " << item.first << ": " << item.second.as<std::string>() << std::endl;
+            }
+        }
+        // std::cerr << "[INFO] properties_copy: " << ov::device::properties.name() << std::endl;
+        // for (auto& item : properties_copy) {
+        //     if (item.first == "NPU" || item.first == "GPU") {
+        //         std::cout << "  " << item.first << ": " << std::endl;
+        //         for (auto& item2 : item.second.as<ov::AnyMap>()) {
+        //             std::cout << "    " << item2.first << ": " << item2.second.as<std::string>() << std::endl;
+        //         }
+        //     }
+        // }
         // Otherwise, the same properties are used for all models and devices
-        auto lm_properties = device_propertes.empty()
+        auto lm_properties = device_properties.empty()
             ? properties_copy
-            : utils::pop_or_default<ov::AnyMap>(device_propertes, device, {});
+            : utils::pop_or_default<ov::AnyMap>(device_properties, device, {});
+        // auto lm_properties = utils::pop_or_default<ov::AnyMap>(device_properties, device, { });
+        std::cerr << "[INFO] lm_properties: " << ov::device::properties.name() << std::endl;
+        for (auto& item : lm_properties) {
+            if (item.first == "NPU" || item.first == "GPU") {
+                std::cout << "  " << item.first << ": " << std::endl;
+                for (auto& item2 : item.second.as<ov::AnyMap>()) {
+                    std::cout << "    " << item2.first << ": " << item2.second.as<std::string>() << std::endl;
+                }
+            } else {
+                std::cout << "    " << item.first << ": " << item.second.as<std::string>() << std::endl;
+            }
+        }
 
         ov::CompiledModel compiled_language_model;
         auto embedder_device = device;
@@ -95,9 +128,18 @@ public:
         m_language = compiled_language_model.create_infer_request();
         m_language.get_tensor("attention_mask").set_shape({1, 0});
 
-        auto embedder_properties = device_propertes.empty()
-            ? properties_copy
-            : utils::pop_or_default<ov::AnyMap>(device_propertes, embedder_device, {});
+        // auto embedder_properties = device_properties.empty()
+        //     ? properties_copy
+        //     : utils::pop_or_default<ov::AnyMap>(device_properties, embedder_device, {});
+        
+        ov::AnyMap embedder_properties;
+        if (m_is_npu) {
+            embedder_properties = utils::pop_or_default<ov::AnyMap>(properties_copy, embedder_device, {});
+        } else {
+            embedder_properties = device_properties.empty()
+                ? properties_copy
+                : utils::pop_or_default<ov::AnyMap>(device_properties, embedder_device, {});
+        }
 
         m_inputs_embedder = std::make_shared<InputsEmbedder>(models_dir, embedder_device, embedder_properties);
         m_tokenizer = m_inputs_embedder->get_tokenizer();
@@ -184,7 +226,9 @@ public:
                 "Currently only \"num_return_sequences\" equal to 1 is supported for NPU device!");
         }
 
+        std::cerr << "Encoded images" << std::endl;
         const auto encoded_images = m_inputs_embedder->encode_images(rgbs);
+        std::cerr << "Encoded images - Done " << std::endl;
         auto [unified_prompt, image_sequence] = m_inputs_embedder->normalize_prompt(prompt, m_image_id, encoded_images);
 
         if (m_is_chat_conversation) {

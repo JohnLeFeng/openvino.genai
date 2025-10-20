@@ -6,6 +6,8 @@
 #include "openvino/genai/visual_language/pipeline.hpp"
 #include "utils.hpp"
 
+#include <iostream>
+
 using namespace ov::genai;
 
 namespace {
@@ -31,6 +33,8 @@ public:
         const std::string& prompt,
         const ov::AnyMap& config_map
     ) {
+
+        // std::cout << " VLMDecodedResults generate( prompt, config_map )" << std::endl;
         auto image = config_map.find(ov::genai::image.name());
         auto images = config_map.find(ov::genai::images.name());
         OPENVINO_ASSERT(
