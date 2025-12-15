@@ -11,7 +11,7 @@ Open Command-Prompt and run below commands
 ```bash
 <OV_DIR>/setupvars.bat
 <OV_GENAI_DIR>/setupvars.bat
-python text2image_export_import_ws.py <model_name> <prompt>
+python text2image_export_import_ws.py <model-dir> <prompt>
 ```
 
 -   Log:
@@ -78,5 +78,12 @@ python text2image_export_import_ws.py <model_name> <prompt>
     [ INFO ] Inference time: 8.318743228912354.
     [WARNING] 23:14:42.162 [NPUZeroInitStructsHolder] zeContextDestroy failed to destroy the context; Level zero context was already destroyed
     ```
+-   UNet blob size
 
+    ```bash
+     Directory of <model-dir>/blobs/unet
 
+    12/14/2025  11:14 PM    <DIR>          .
+    12/14/2025  11:14 PM    <DIR>          ..
+    12/14/2025  11:14 PM        72,712,192 openvino_model.blob
+    ```
