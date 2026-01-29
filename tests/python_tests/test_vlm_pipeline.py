@@ -1925,3 +1925,30 @@ def test_cdpruner_continuous_batching(
     )
 
     assert results[0].texts[0].strip() != "", "Result should not be empty"
+
+
+@pytest.mark.parametrize("model_id", MODEL_IDS)
+@pytest.mark.skipif(
+    sys.platform == "darwin" or platform.machine() in ["aarch64", "arm64", "ARM64"],
+    reason="NPU plugin is available only on Linux and Windows x86_64",
+)
+def test_vlm_pipeline_npu_with_embedder_device_gpu(model_id: str, cat_tensor: openvino.Tensor):
+    if model_id in NPU_UNSUPPORTED_MODELS:
+        pytest.skip(f"{model_id} is not supported")
+
+    model_path = _get_ov_model(model_id)
+
+    # Create config with GPU as embedder device (for NPU execution)
+    config = VLMPipeline.Config(embedder_device="GPU")
+    config.validate()
+
+    # Initialize pipeline on NPU with GPU embedder
+    properties = {
+        "DEVICE_PROPERTIES": {
+            "NPU": {"NPUW_DEVICES": "CPU", "NPUW_ONLINE_PIPELINE": "NONE", "MAX_PROMPT_LEN": 4096}
+        }
+    }
+    ov_pipe = VLMPipeline(model_path, "NPU", config, **properties)
+
+    generation_config = _setup_generation_config(ov_pipe)
+    ov_pipe.generate(PROMPTS[0], images=[cat_tensor], generation_config=generation_config)
