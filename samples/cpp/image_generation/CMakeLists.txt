@@ -70,6 +70,24 @@ install(TARGETS lora_text2image
         COMPONENT samples_bin
         EXCLUDE_FROM_ALL)
 
+# create text2image weightless Blob sample executable
+
+add_executable(text2image_weightless_blob
+    text2image_weightless_blob.cpp
+    imwrite.cpp)
+
+target_include_directories(text2image_weightless_blob PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(text2image_weightless_blob PRIVATE openvino::genai indicators::indicators)
+
+set_target_properties(text2image_weightless_blob PROPERTIES
+    # Ensure out of box LC_RPATH on macOS with SIP
+    INSTALL_RPATH_USE_LINK_PATH ON)
+
+install(TARGETS text2image_weightless_blob
+        RUNTIME DESTINATION samples_bin/
+        COMPONENT samples_bin
+        EXCLUDE_FROM_ALL)
+
 # create TaylorSeer text2image sample executable
 
 add_executable(taylorseer_text2image taylorseer_text2image.cpp imwrite.cpp)
