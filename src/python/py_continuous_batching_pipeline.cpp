@@ -22,6 +22,7 @@ using ov::genai::AggregationMode;
 using ov::genai::SparseAttentionMode;
 using ov::genai::CacheEvictionConfig;
 using ov::genai::SparseAttentionConfig;
+using ov::genai::OffloadConfig;
 using ov::genai::ContinuousBatchingPipeline;
 using ov::genai::GenerationResult;
 using ov::genai::EncodedGenerationResult;
@@ -434,6 +435,19 @@ void init_continuous_batching_pipeline(py::module_& m) {
             .def_readwrite("xattention_stride", &SparseAttentionConfig::xattention_stride)
             .def("to_string", &SparseAttentionConfig::to_string);
 
+    auto offload_config = py::class_<OffloadConfig>(m, "OffloadConfig", "Configuration for KV-cache offloading to host RAM or disk. Requires SchedulerConfig.enable_prefix_caching = True.")
+            .def(py::init<>())
+            .def_readwrite("enabled", &OffloadConfig::enabled)
+            .def_readwrite("tier", &OffloadConfig::tier)
+            .def_readwrite("max_offload_bytes", &OffloadConfig::max_offload_bytes)
+            .def_readwrite("trigger_free_blocks", &OffloadConfig::trigger_free_blocks)
+            .def_readwrite("disk_path", &OffloadConfig::disk_path)
+            .def("to_string", &OffloadConfig::to_string);
+
+    py::enum_<OffloadConfig::Tier>(offload_config, "Tier")
+            .value("HOST_RAM", OffloadConfig::Tier::HOST_RAM)
+            .value("DISK", OffloadConfig::Tier::DISK);
+
     py::class_<SchedulerConfig>(m, "SchedulerConfig", scheduler_config_docstring)
         .def(py::init<>())
         .def_readwrite("max_num_batched_tokens", &SchedulerConfig::max_num_batched_tokens)
@@ -448,6 +462,7 @@ void init_continuous_batching_pipeline(py::module_& m) {
         .def_readwrite("cache_eviction_config", &SchedulerConfig::cache_eviction_config)
         .def_readwrite("use_sparse_attention", &SchedulerConfig::use_sparse_attention)
         .def_readwrite("sparse_attention_config", &SchedulerConfig::sparse_attention_config)
+        .def_readwrite("offload_config", &SchedulerConfig::offload_config)
         .def("to_string", &SchedulerConfig::to_string);
 
     py::class_<PipelineMetrics>(m, "PipelineMetrics", pipeline_metrics_docstring)

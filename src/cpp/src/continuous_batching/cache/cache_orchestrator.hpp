@@ -22,6 +22,7 @@
 #include "continuous_batching/cache/block_manager.hpp"
 #include "continuous_batching/cache/kv_cache_manager.hpp"
 #include "continuous_batching/cache/linear_attention_cache_manager.hpp"
+#include "continuous_batching/cache/offload_manager.hpp"
 
 namespace ov::genai {
 
@@ -821,6 +822,16 @@ private:
             kv_manager->get_block_size(),
             num_block_table_layers);
 
+        // Enable KV-cache offload (demote/promote of prefix-cached blocks) when requested. This requires a single
+        // shared block-table layer, because the host<->device transfer primitives address a block by one index
+        // applied across all decoder layers - which is not valid under per-layer block-table control (cache eviction).
+        if (config.offload_config.enabled && config.enable_prefix_caching && !per_layer_control) {
+            m_kv_offload_manager = std::make_unique<OffloadManager>(config.offload_config,
+                                                                    kv_manager->get_block_size_in_bytes());
+            m_kv_offload_manager->set_cache_manager(kv_manager.get());
+            block_manager->set_offload_manager(m_kv_offload_manager.get());
+        }
+
         register_cache_type(CacheType::KV_CACHE, std::move(kv_manager), std::move(block_manager),
                             per_layer_control);
     }
@@ -857,6 +868,10 @@ private:
 
     std::map<CacheType, std::unique_ptr<ICacheManager>> m_cache_managers;
     std::map<CacheType, std::unique_ptr<BlockManager>> m_block_managers;
+    // Optional offload manager for the KV cache. Block managers reference it via a raw pointer but never touch it
+    // during destruction, and it holds only a raw pointer to the KV cache manager (declared earlier), so member
+    // destruction order is safe.
+    std::unique_ptr<OffloadManager> m_kv_offload_manager;
     bool m_use_per_layer_kv_block_indices = false;
     std::map<CacheType, std::set<size_t>> m_pending_zero_blocks;
 

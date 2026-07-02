@@ -7,6 +7,7 @@
 #include <limits>
 #include <optional>
 #include <sstream>
+#include <string>
 
 #include "openvino/genai/cache_eviction.hpp"
 #include "openvino/genai/sparse_attention.hpp"
@@ -14,6 +15,55 @@
 namespace ov::genai {
 
 inline constexpr std::size_t DEFAULT_LINEAR_ATTENTION_CACHE_INTERVAL_MULTIPLIER = 8;
+
+/**
+ * Configuration for KV-cache offloading. When enabled, prefix-cached KV blocks that would otherwise be
+ * overwritten once device cache is exhausted are instead demoted to a cheaper storage tier (host RAM or disk)
+ * and restored on a future prefix-cache hit. Offloading requires prefix caching to be enabled, since offloaded
+ * blocks are keyed by their prefix hash.
+ */
+struct OffloadConfig {
+    /// Storage tier for offloaded KV blocks.
+    enum class Tier {
+        HOST_RAM,  ///< Offload to host (CPU) RAM.
+        DISK       ///< Offload to a memory-mapped file on disk.
+    };
+
+    /// Whether KV-cache offloading is enabled. Requires SchedulerConfig::enable_prefix_caching == true.
+    bool enabled = false;
+
+    /// Storage tier for offloaded blocks.
+    Tier tier = Tier::HOST_RAM;
+
+    /// Maximum number of bytes that may be held in the offload tier. 0 means unbounded for HOST_RAM.
+    /// Must be non-zero when tier == DISK.
+    std::size_t max_offload_bytes = 0;
+
+    /// Demote prefix blocks to the offload tier when the number of free device blocks drops to this value or
+    /// below. 0 means only demote a block when it would otherwise be overwritten (i.e. on cache exhaustion).
+    std::size_t trigger_free_blocks = 0;
+
+    /// Path to the backing file used when tier == DISK.
+    std::string disk_path;
+
+    bool operator==(const OffloadConfig& other) const {
+        return enabled == other.enabled && tier == other.tier &&
+               max_offload_bytes == other.max_offload_bytes &&
+               trigger_free_blocks == other.trigger_free_blocks && disk_path == other.disk_path;
+    }
+
+    std::string to_string() const {
+        std::ostringstream oss;
+        oss << "  offload_config: { \n";
+        oss << "    enabled: " << std::boolalpha << enabled << "\n";
+        oss << "    tier: " << (tier == Tier::HOST_RAM ? "HOST_RAM" : "DISK") << "\n";
+        oss << "    max_offload_bytes: " << max_offload_bytes << "\n";
+        oss << "    trigger_free_blocks: " << trigger_free_blocks << "\n";
+        oss << "    disk_path: " << disk_path << "\n";
+        oss << "  }";
+        return oss.str();
+    }
+};
 
 struct SchedulerConfig {
     // a maximum number of tokens to batch
@@ -85,6 +135,13 @@ struct SchedulerConfig {
      */
     SparseAttentionConfig sparse_attention_config;
 
+    /**
+     * Configuration for KV-cache offloading. Setting `offload_config.enabled = true` demotes prefix-cached KV
+     * blocks to a cheaper storage tier (host RAM or disk) instead of overwriting them when device cache is
+     * exhausted, and restores them on a future prefix-cache hit. Requires `enable_prefix_caching == true`.
+     */
+    OffloadConfig offload_config;
+
     std::size_t get_cache_interval(std::size_t kv_block_size) const {
         const std::size_t effective_cache_interval_multiplier =
             cache_interval_multiplier.value_or(DEFAULT_LINEAR_ATTENTION_CACHE_INTERVAL_MULTIPLIER);
@@ -100,6 +157,14 @@ struct SchedulerConfig {
     void validate() const {
         OPENVINO_ASSERT(!enable_prefix_caching || !cache_interval_multiplier.has_value() || cache_interval_multiplier.value() > 0,
                 "SchedulerConfig cache_interval_multiplier must be greater than 0 when prefix caching is enabled");
+        OPENVINO_ASSERT(!offload_config.enabled || enable_prefix_caching,
+                "SchedulerConfig offload_config requires enable_prefix_caching to be set to true");
+        OPENVINO_ASSERT(!offload_config.enabled || offload_config.tier != OffloadConfig::Tier::DISK ||
+                            !offload_config.disk_path.empty(),
+                "SchedulerConfig offload_config.disk_path must be set when offload tier is DISK");
+        OPENVINO_ASSERT(!offload_config.enabled || offload_config.tier != OffloadConfig::Tier::DISK ||
+                            offload_config.max_offload_bytes > 0,
+                "SchedulerConfig offload_config.max_offload_bytes must be greater than 0 when offload tier is DISK");
     }
 
     bool operator==(const SchedulerConfig& other) const {
@@ -107,7 +172,7 @@ struct SchedulerConfig {
                cache_size == other.cache_size && num_linear_attention_blocks == other.num_linear_attention_blocks &&
                dynamic_split_fuse == other.dynamic_split_fuse && use_cache_eviction == other.use_cache_eviction &&
                max_num_seqs == other.max_num_seqs && enable_prefix_caching == other.enable_prefix_caching &&
-               cache_interval_multiplier == other.cache_interval_multiplier;
+               cache_interval_multiplier == other.cache_interval_multiplier && offload_config == other.offload_config;
     }
 
     /**
@@ -139,6 +204,10 @@ struct SchedulerConfig {
         oss << "  use_sparse_attention: " << std::boolalpha << use_sparse_attention << "\n";
         if (use_sparse_attention) {
             oss << sparse_attention_config.to_string() << "\n";
+        }
+        oss << "  enable_offload: " << std::boolalpha << offload_config.enabled << "\n";
+        if (offload_config.enabled) {
+            oss << offload_config.to_string() << "\n";
         }
         oss << " }";
         return oss.str();

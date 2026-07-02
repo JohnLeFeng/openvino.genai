@@ -16,6 +16,7 @@
 
 #include "logger.hpp"
 #include "sequence_group.hpp"
+#include "continuous_batching/cache/offload_manager.hpp"
 
 namespace ov::genai {
 
@@ -206,11 +207,27 @@ class BlockAllocator {
     size_t m_num_layers;
     bool m_enable_prefix_caching;
     ov::genai::OverwritableBlocksHashStore m_overwriteable_blocks;
+    // Optional KV-cache offload manager. When set and enabled, prefix-cached blocks that would otherwise be
+    // overwritten on cache exhaustion are first demoted (copied) to a host/disk tier and can later be promoted back.
+    OffloadManager* m_offload_manager = nullptr;
 
 public:
+    /// @brief Inject the offload manager used for demote/promote of prefix-cached blocks. May be null (no offload).
+    void set_offload_manager(OffloadManager* offload_manager) {
+        m_offload_manager = offload_manager;
+    }
+
+    /// @return Whether the given hash currently resides in the offload tier.
+    bool is_offloaded(size_t hash) const {
+        return m_offload_manager != nullptr && m_offload_manager->enabled() && m_offload_manager->is_offloaded(hash);
+    }
+
     struct CacheBlockAllocationResult {
         BlocksPerLayer blocks;
         std::optional<uint64_t> erased_hash;
+        // Set when the previously-cached hash was demoted to the offload tier (instead of being destroyed). The hash
+        // remains reusable via promotion, so its content-length bookkeeping must be preserved by the BlockManager.
+        std::optional<uint64_t> demoted_hash;
 
         operator BlocksPerLayer&() {
             return blocks;
@@ -498,8 +515,26 @@ public:
             // get least recently used block from store and reuse it
             result.blocks = m_overwriteable_blocks.get_lru_block_to_overwrite();
             const uint64_t previous_hash = result.blocks[0]->get_hash();
+
+            // Before the victim block's contents are overwritten, optionally demote (copy) them to the offload tier
+            // so that the prefix can be promoted back later instead of being recomputed.
+            bool demoted = false;
+            if (m_offload_manager != nullptr && m_offload_manager->enabled()) {
+                std::vector<size_t> block_indices;
+                block_indices.reserve(result.blocks.size());
+                for (const auto& block : result.blocks) {
+                    block_indices.push_back(static_cast<size_t>(block->get_index()));
+                }
+                demoted = m_offload_manager->offload(previous_hash, block_indices);
+            }
+
             if (cached_blocks.erase(previous_hash) > 0) {
-                result.erased_hash = previous_hash;
+                if (demoted) {
+                    // Keep the hash registered for reuse via promotion; signal demotion rather than destruction.
+                    result.demoted_hash = previous_hash;
+                } else {
+                    result.erased_hash = previous_hash;
+                }
             }
 
             // update block with new hash
@@ -541,7 +576,36 @@ public:
     }
 
     bool has_cached_block(size_t hash, const std::map<uint64_t, BlocksPerLayer>& cached_blocks) const {
-        return m_overwriteable_blocks.has_block(hash) || cached_blocks.count(hash) > 0;
+        return m_overwriteable_blocks.has_block(hash) || cached_blocks.count(hash) > 0 || is_offloaded(hash);
+    }
+
+    /**
+     * Promotes an offloaded prefix block set back onto the device. Secures a device block set for @p hash (allocating
+     * a fresh block or reusing/demoting a least-recently-used one), restores the previously offloaded KV contents into
+     * it and registers it under @p hash in @p cached_blocks.
+     * @param hash The hash of the offloaded block set to restore.
+     * @param cached_blocks The map of known hashes to allocated blocks; the restored blocks are added under @p hash.
+     * @return The allocation result (carrying any erased/demoted hash for bookkeeping), or empty blocks on failure.
+     */
+    CacheBlockAllocationResult restore_offloaded_block(size_t hash,
+                                                       std::map<uint64_t, BlocksPerLayer>& cached_blocks) {
+        OPENVINO_ASSERT(m_enable_prefix_caching);
+        OPENVINO_ASSERT(is_offloaded(hash), "restore_offloaded_block called for a hash that is not offloaded");
+        OPENVINO_ASSERT(can_allocate_blocks(1), "no device blocks available to promote an offloaded prefix block");
+
+        // Secure a device block set; this may itself demote another LRU prefix block to the offload tier.
+        CacheBlockAllocationResult result = allocate_block(hash, cached_blocks);
+        if (result.blocks.empty()) {
+            return result;
+        }
+        std::vector<size_t> block_indices;
+        block_indices.reserve(result.blocks.size());
+        for (const auto& block : result.blocks) {
+            block_indices.push_back(static_cast<size_t>(block->get_index()));
+        }
+        const bool restored = m_offload_manager->restore(hash, block_indices);
+        OPENVINO_ASSERT(restored, "offloaded block disappeared before it could be promoted, hash ", hash);
+        return result;
     }
 
     /**
@@ -629,6 +693,11 @@ public:
         OPENVINO_ASSERT(num_layers != 0, "num_layers must be non-zero");
         OPENVINO_ASSERT(!restore_latest_prefix_block_only || enable_prefix_caching,
                         "Latest prefix block restore requires prefix caching to be enabled");
+    }
+
+    /// @brief Inject the KV-cache offload manager so prefix-cached blocks can be demoted/promoted on cache pressure.
+    void set_offload_manager(OffloadManager* offload_manager) {
+        m_allocator.set_offload_manager(offload_manager);
     }
 
     ~BlockManager() {
@@ -1448,8 +1517,12 @@ private:
         auto& block_table = m_block_table[seq_id];
 
         for (size_t content_len : plan.block_content_lengths) {
-            auto blocks = m_allocator.get_cached_block(sequence->get_hash(content_len, m_block_size),
-                                                       m_prefix_hash_to_cached_blocks);
+            const uint64_t hash = sequence->get_hash(content_len, m_block_size);
+            // Prefer an on-device copy; if the block is only present in the offload tier, promote it back first.
+            BlocksPerLayer blocks = m_allocator.get_cached_block(hash, m_prefix_hash_to_cached_blocks);
+            if (blocks.empty() && m_allocator.is_offloaded(hash)) {
+                blocks = restore_offloaded_cached_block(hash, content_len);
+            }
             OPENVINO_ASSERT(!blocks.empty(), "Prefix restore plan became unavailable for token position ", content_len);
             const auto timestamp = std::chrono::steady_clock::now();
             for (size_t layer_idx = 0; layer_idx < block_table.size(); layer_idx++) {
@@ -1646,6 +1719,23 @@ private:
 
     BlocksPerLayer allocate_cached_block(uint64_t hash, size_t content_length) {
         BlockAllocator::CacheBlockAllocationResult allocation_result = m_allocator.allocate_block(hash, m_prefix_hash_to_cached_blocks);
+        if (allocation_result.erased_hash.has_value()) {
+            unregister_cached_hash(*allocation_result.erased_hash);
+        }
+        // demoted_hash entries are intentionally kept registered - the prefix remains reusable via promotion.
+        register_cached_content_length(hash, content_length);
+        return allocation_result.blocks;
+    }
+
+    /**
+     * Promotes an offloaded prefix block back onto the device and updates the cached-hash bookkeeping accordingly.
+     * @param hash The hash of the offloaded block to restore.
+     * @param content_length The content length associated with this prefix block.
+     * @return The restored on-device blocks (one per layer).
+     */
+    BlocksPerLayer restore_offloaded_cached_block(uint64_t hash, size_t content_length) {
+        BlockAllocator::CacheBlockAllocationResult allocation_result =
+            m_allocator.restore_offloaded_block(hash, m_prefix_hash_to_cached_blocks);
         if (allocation_result.erased_hash.has_value()) {
             unregister_cached_hash(*allocation_result.erased_hash);
         }

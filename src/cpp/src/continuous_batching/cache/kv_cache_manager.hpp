@@ -32,6 +32,22 @@ class KVCacheManager : public ICacheManager {
         m_request.set_tensor(std::string("value_cache.") + std::to_string(decoder_layer_id), m_value_cache[decoder_layer_id]);
     }
 
+    // Copies the raw bytes of a single block (outermost dimension slice) between a device cache tensor and a
+    // host buffer. A block is a contiguous region in the leading (block) dimension, so a plain memcpy is exact
+    // for all precisions (including sub-byte). Returns the number of bytes copied for this tensor.
+    size_t copy_block_bytes(const ov::Tensor& cache_tensor, size_t block_index, uint8_t* host_ptr, bool to_host) const {
+        const size_t per_block_bytes = cache_tensor.get_byte_size() / m_num_allocated_kv_blocks;
+        OPENVINO_SUPPRESS_DEPRECATED_START
+        uint8_t* device_ptr = reinterpret_cast<uint8_t*>(cache_tensor.data()) + block_index * per_block_bytes;
+        OPENVINO_SUPPRESS_DEPRECATED_END
+        if (to_host) {
+            std::memcpy(host_ptr, device_ptr, per_block_bytes);
+        } else {
+            std::memcpy(device_ptr, host_ptr, per_block_bytes);
+        }
+        return per_block_bytes;
+    }
+
 public:
     /**
      * @brief Check whether the compiled model has KV cache inputs (key_cache.* / value_cache.*).
@@ -273,6 +289,36 @@ public:
 
     size_t get_v_head_size(size_t layer_id) const {
         return m_value_shapes[layer_id][3].get_length();
+    }
+
+    void read_block_to_host(size_t block_index, uint8_t* host_dst) const override {
+        OPENVINO_ASSERT(!m_context, "read_block_to_host for remote (GPU) KV cache is not implemented yet");
+        OPENVINO_ASSERT(block_index < m_num_allocated_kv_blocks,
+                        "read_block_to_host: block_index ", block_index, " out of range (allocated ", m_num_allocated_kv_blocks, ")");
+        OPENVINO_ASSERT(m_num_allocated_kv_blocks > 0, "read_block_to_host: no KV blocks allocated");
+
+        size_t offset = 0;
+        for (size_t decoder_layer_id = 0; decoder_layer_id < m_num_layers; ++decoder_layer_id) {
+            offset += copy_block_bytes(m_key_cache[decoder_layer_id], block_index, host_dst + offset, /*to_host=*/true);
+            offset += copy_block_bytes(m_value_cache[decoder_layer_id], block_index, host_dst + offset, /*to_host=*/true);
+        }
+        OPENVINO_ASSERT(offset == m_block_size_in_bytes,
+                        "read_block_to_host: serialized ", offset, " bytes but block size is ", m_block_size_in_bytes);
+    }
+
+    void write_block_from_host(size_t block_index, const uint8_t* host_src) override {
+        OPENVINO_ASSERT(!m_context, "write_block_from_host for remote (GPU) KV cache is not implemented yet");
+        OPENVINO_ASSERT(block_index < m_num_allocated_kv_blocks,
+                        "write_block_from_host: block_index ", block_index, " out of range (allocated ", m_num_allocated_kv_blocks, ")");
+        OPENVINO_ASSERT(m_num_allocated_kv_blocks > 0, "write_block_from_host: no KV blocks allocated");
+
+        size_t offset = 0;
+        for (size_t decoder_layer_id = 0; decoder_layer_id < m_num_layers; ++decoder_layer_id) {
+            offset += copy_block_bytes(m_key_cache[decoder_layer_id], block_index, const_cast<uint8_t*>(host_src) + offset, /*to_host=*/false);
+            offset += copy_block_bytes(m_value_cache[decoder_layer_id], block_index, const_cast<uint8_t*>(host_src) + offset, /*to_host=*/false);
+        }
+        OPENVINO_ASSERT(offset == m_block_size_in_bytes,
+                        "write_block_from_host: serialized ", offset, " bytes but block size is ", m_block_size_in_bytes);
     }
 
     void copy_blocks(const std::map<size_t, std::list<size_t>>& block_copy_map) override {

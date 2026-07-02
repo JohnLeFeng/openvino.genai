@@ -4,10 +4,13 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <list>
 #include <map>
 #include <set>
 #include <string>
+
+#include "openvino/core/except.hpp"
 
 namespace ov::genai {
 
@@ -41,6 +44,30 @@ public:
      * @param block_indices Physical block indices to zero.
      */
     virtual void zero_blocks(const std::set<size_t>& block_indices) {}
+
+    /**
+     * @brief Copy a single physical block (all cache tensors for that block index) from device memory into a
+     * contiguous host buffer. Used by KV-cache offloading to demote a block to a cheaper storage tier.
+     * The destination buffer must be at least @ref get_block_size_in_bytes() bytes.
+     * Cache types that do not support offloading keep the default (throwing) implementation.
+     * @param block_index Physical block index to read.
+     * @param host_dst Destination host buffer.
+     */
+    virtual void read_block_to_host(size_t block_index, uint8_t* host_dst) const {
+        OPENVINO_THROW("read_block_to_host is not supported for this cache type");
+    }
+
+    /**
+     * @brief Copy a single physical block (all cache tensors for that block index) from a contiguous host buffer
+     * back into device memory. Used by KV-cache offloading to restore a previously demoted block.
+     * The source buffer must be at least @ref get_block_size_in_bytes() bytes.
+     * Cache types that do not support offloading keep the default (throwing) implementation.
+     * @param block_index Physical block index to write.
+     * @param host_src Source host buffer.
+     */
+    virtual void write_block_from_host(size_t block_index, const uint8_t* host_src) {
+        OPENVINO_THROW("write_block_from_host is not supported for this cache type");
+    }
 
     /**
      * @brief Clear all cache storage, resetting to an empty state.
