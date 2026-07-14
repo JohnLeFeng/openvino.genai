@@ -9,9 +9,17 @@ from diffusers import DDIMScheduler, DiffusionPipeline
 from diffusers.utils import load_image
 import torch.nn.functional as F
 from torchvision.transforms.functional import to_tensor, gaussian_blur
+import argparse
+
+import argparse
 
 dtype = torch.float16
-device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu") 
+device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+
+# Parse command-line arguments
+parser = argparse.ArgumentParser(description="SDXL Attentive Eraser with optional OpenVINO conversion")
+parser.add_argument("--convert-unet", action="store_true", help="Convert AAS-modified UNet to OpenVINO IR")
+args = parser.parse_args()
 
 scheduler = DDIMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", clip_sample=False, set_alpha_to_one=False)
 pipeline = DiffusionPipeline.from_pretrained(
@@ -184,5 +192,8 @@ image = pipeline(
 image.save('./removed_img_torch.png')
 print("Object removal completed")
 
-# Convert the AAS-modified UNet to OpenVINO IR after generation.
-convert_unet_to_openvino(pipeline.unet)
+# Convert the AAS-modified UNet to OpenVINO IR after generation (if --convert-unet flag is set).
+if args.convert_unet:
+    convert_unet_to_openvino(pipeline.unet)
+else:
+    print("Skipping UNet conversion (use --convert-unet to enable)")
