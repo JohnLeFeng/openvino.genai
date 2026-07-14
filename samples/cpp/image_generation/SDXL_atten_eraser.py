@@ -13,6 +13,10 @@ from torchvision.transforms.functional import to_tensor, gaussian_blur
 import argparse
 
 
+dtype = torch.float16
+device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+
+
 def parse_args() -> argparse.Namespace:
     """Parse and return command line arguments."""
     parser = argparse.ArgumentParser(description="SDXL Attentive Eraser with optional OpenVINO conversion")
@@ -161,11 +165,6 @@ def main():
     save_image = args.save_image
     image_output_dir = args.image_output_dir
 
-    dtype = torch.float16
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-
-
-
     scheduler = DDIMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", clip_sample=False, set_alpha_to_one=False)
     pipeline = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
@@ -182,13 +181,13 @@ def main():
     source_image_path = "https://raw.githubusercontent.com/Anonym0u3/Images/refs/heads/main/an1024.png"
     mask_path = "https://raw.githubusercontent.com/Anonym0u3/Images/refs/heads/main/an1024_mask.png"
     if save_image:
+        # Create output directory if needed
+        Path(image_output_dir).mkdir(parents=True, exist_ok=True)
         source_out = str(Path(image_output_dir) / "source_image.png")
         mask_out = str(Path(image_output_dir) / "mask.png")
         save_as_jpg(source_image_path, mask_path, source_out=source_out, mask_out=mask_out)
     source_image = preprocess_image(source_image_path, device)
     mask = preprocess_mask(mask_path, device)
-
-    
 
     image = pipeline(
         prompt=prompt, 
