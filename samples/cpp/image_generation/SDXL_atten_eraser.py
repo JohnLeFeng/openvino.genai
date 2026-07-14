@@ -68,5 +68,5 @@ image = pipeline(
     generator=generator,
     guidance_scale=1,
 ).images[0]
-image.save('./removed_img.png')
+image.save('./removed_img_torch.png')
 print("Object removal completed")
