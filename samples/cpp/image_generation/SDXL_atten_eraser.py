@@ -146,11 +146,19 @@ def preprocess_mask(mask_path, device):
     mask = mask.to(dtype).to(device)
     return mask
 
+def save_as_jpg(source_image_path, mask_path, source_out="source_image.jpg", mask_out="mask.jpg"):
+    """Download the source image and mask (URL or local path) and save them as .jpg."""
+    # JPEG has no alpha channel, so convert both to RGB before saving.
+    load_image(source_image_path).convert("RGB").save(source_out, "JPEG", quality=95)
+    load_image(mask_path).convert("RGB").save(mask_out, "JPEG", quality=95)
+    print(f"Saved source image to {source_out} and mask to {mask_out}")
+
 prompt = "" # Set prompt to null
 seed=123 
 generator = torch.Generator(device=device).manual_seed(seed)
 source_image_path = "https://raw.githubusercontent.com/Anonym0u3/Images/refs/heads/main/an1024.png"
 mask_path = "https://raw.githubusercontent.com/Anonym0u3/Images/refs/heads/main/an1024_mask.png"
+save_as_jpg(source_image_path, mask_path)
 source_image = preprocess_image(source_image_path, device)
 mask = preprocess_mask(mask_path, device)
 
