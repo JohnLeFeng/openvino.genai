@@ -24,7 +24,59 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=str, default="./sdxl_atten_eraser_ov/unet", help="Output directory for OpenVINO IR (default: ./sdxl_atten_eraser_ov/unet)")
     parser.add_argument("--save-image", action="store_true", help="Save the generated inpainted image as PNG")
     parser.add_argument("--image-output-dir", type=str, default=".", help="Output directory for the generated image (default: current directory)")
+    parser.add_argument("--save-intermediate", action="store_true", help="Save intermediate denoising steps")
+    parser.add_argument("--intermediate-dir", type=str, default="./intermediate_steps", help="Output directory for intermediate steps (default: ./intermediate_steps)")
+    parser.add_argument("--intermediate-steps", type=int, default=1, help="Save intermediate result every N steps (default: 1)")
     return parser.parse_args()
+
+def create_latents_callback(save_dir, step_interval):
+    """Create a callback function to save intermediate denoising steps.
+    
+    Args:
+        save_dir: Directory to save intermediate images
+        step_interval: Save every N steps
+    
+    Returns:
+        Callback function for use with diffusers pipeline
+    """
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+    
+    def latents_callback(pipe, step, timestep, callback_kwargs):
+        """Save intermediate latents as decoded images."""
+        if step % step_interval == 0:
+            # Extract the latents at this specific step
+            latents = callback_kwargs["latents"]
+
+            # SDXL's VAE overflows to NaN (black image) when decoding in fp16.
+            # The normal pipeline upcasts the VAE to fp32 before the final decode;
+            # do the same here for the intermediate decode, then restore.
+            vae = pipe.vae
+            orig_vae_dtype = vae.dtype
+            needs_upcast = orig_vae_dtype == torch.float16
+            if needs_upcast:
+                vae = vae.to(dtype=torch.float32)
+
+            with torch.no_grad():
+                # Scale and decode the latents into an image
+                scaled = latents.to(vae.dtype) / vae.config.scaling_factor
+                image = vae.decode(scaled).sample
+
+            if needs_upcast:
+                vae.to(dtype=orig_vae_dtype)
+
+            # Process and save the image
+            image = (image / 2 + 0.5).clamp(0, 1)
+            image = image.cpu().permute(0, 2, 3, 1).float().numpy()
+            pil_image = pipe.numpy_to_pil(image)[0]
+
+            # Save the intermediate result with step index in filename
+            img_path = Path(save_dir) / f"step_{step:02d}.png"
+            pil_image.save(str(img_path))
+
+        return callback_kwargs
+    
+    return latents_callback
+
 
 def _find_aas_editor(unet):
     """Recover the AAS editor that the pipeline monkey-patched onto the UNet.
@@ -164,6 +216,9 @@ def main():
     convert_unet = args.convert_unet
     save_image = args.save_image
     image_output_dir = args.image_output_dir
+    save_intermediate = args.save_intermediate
+    intermediate_dir = args.intermediate_dir
+    intermediate_steps = args.intermediate_steps
 
     scheduler = DDIMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", clip_sample=False, set_alpha_to_one=False)
     pipeline = DiffusionPipeline.from_pretrained(
@@ -189,6 +244,13 @@ def main():
     source_image = preprocess_image(source_image_path, device)
     mask = preprocess_mask(mask_path, device)
 
+    # Create step callback if saving intermediates
+    callback_on_step_end = None
+    callback_on_step_end_tensor_inputs = None
+    if save_intermediate:
+        callback_on_step_end = create_latents_callback(intermediate_dir, intermediate_steps)
+        callback_on_step_end_tensor_inputs=["latents"]
+
     image = pipeline(
         prompt=prompt, 
         image=source_image,
@@ -206,12 +268,17 @@ def main():
         num_inference_steps=50, # number of inference steps # AAS_end_step = int(strength*num_inference_steps)
         generator=generator,
         guidance_scale=1,
+        callback_on_step_end=callback_on_step_end,
+        callback_on_step_end_tensor_inputs=callback_on_step_end_tensor_inputs,
     ).images[0]
 
     output_path = Path(image_output_dir) / "removed_img_torch.png"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     image.save(str(output_path))
     print(f"Object removal completed. Image saved to {output_path.resolve()}")
+    
+    if save_intermediate:
+        print(f"Intermediate denoising steps saved to {intermediate_dir} (every {intermediate_steps} steps)")
 
     # Convert the AAS-modified UNet to OpenVINO IR after generation (if --convert-unet flag is set).
     if convert_unet:
