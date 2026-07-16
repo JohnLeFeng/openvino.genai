@@ -157,6 +157,21 @@ install(TARGETS image2image
         COMPONENT samples_bin
         EXCLUDE_FROM_ALL)
 
+# create SDXL Attentive Eraser sample executable
+
+add_executable(attentive_eraser attentive_eraser_pipeline.cpp load_image.cpp imwrite.cpp)
+
+target_include_directories(attentive_eraser PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}")
+target_link_libraries(attentive_eraser PRIVATE openvino::genai indicators::indicators)
+
+set_target_properties(attentive_eraser PROPERTIES
+    INSTALL_RPATH_USE_LINK_PATH ON)
+
+install(TARGETS attentive_eraser
+    RUNTIME DESTINATION samples_bin/
+    COMPONENT samples_bin
+    EXCLUDE_FROM_ALL)
+
 # create image2image concurrent sample executable
 
 add_executable(image2image_concurrency image2image_concurrency.cpp load_image.cpp imwrite.cpp)

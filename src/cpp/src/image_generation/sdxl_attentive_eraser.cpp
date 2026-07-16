@@ -252,7 +252,7 @@ public:
     explicit AttentiveEraserUNet(const std::filesystem::path& model_path) {
         model = utils::singleton_core().read_model(model_path);
         const std::set<std::string> expected_inputs{
-            "sample", "timestep", "encoder_hidden_states", "text_embeds", "time_ids", "mask"};
+            "sample", "timestep", "encoder_hidden_states", "text_embeds", "time_ids", "mask", "cur_step", "ss_steps"};
         std::set<std::string> actual_inputs;
         for (const ov::Output<ov::Node>& input : model->inputs()) {
             actual_inputs.insert(input.get_any_name());
@@ -265,7 +265,9 @@ public:
                 {"encoder_hidden_states", {2, 77, 2048}},
                 {"text_embeds", {2, 1280}},
                 {"time_ids", {2, 6}},
-                {"mask", {1, 1, 1024, 1024}}});
+                {"mask", {1, 1, 1024, 1024}},
+                {"cur_step", {}},
+                {"ss_steps", {}}});
 
         ov::preprocess::PrePostProcessor preprocessor(model);
         for (const char* name : {"sample", "encoder_hidden_states", "text_embeds", "time_ids", "mask"}) {
@@ -286,16 +288,24 @@ public:
                      const ov::Tensor& encoder_hidden_states,
                      const ov::Tensor& text_embeds,
                      const ov::Tensor& time_ids,
-                     const ov::Tensor& mask) {
+                     const ov::Tensor& mask,
+                     size_t current_step,
+                     size_t ss_steps) {
         OPENVINO_ASSERT(request, "Attentive Eraser UNet must be compiled before generation");
         ov::Tensor timestep_tensor(ov::element::i64, {});
         *timestep_tensor.data<int64_t>() = timestep;
+        ov::Tensor current_step_tensor(ov::element::i64, {});
+        *current_step_tensor.data<int64_t>() = static_cast<int64_t>(current_step);
+        ov::Tensor ss_steps_tensor(ov::element::i64, {});
+        *ss_steps_tensor.data<int64_t>() = static_cast<int64_t>(ss_steps);
         request.set_tensor("sample", sample);
         request.set_tensor("timestep", timestep_tensor);
         request.set_tensor("encoder_hidden_states", encoder_hidden_states);
         request.set_tensor("text_embeds", text_embeds);
         request.set_tensor("time_ids", time_ids);
         request.set_tensor("mask", mask);
+        request.set_tensor("cur_step", current_step_tensor);
+        request.set_tensor("ss_steps", ss_steps_tensor);
         request.infer();
         return request.get_output_tensor(0);
     }
@@ -442,7 +452,9 @@ ov::Tensor SDXLAttentiveEraser::generate(ov::Tensor initial_image,
                                                    hidden_states,
                                                    text_embeds,
                                                    time_ids,
-                                                   full_resolution_mask);
+                                                   full_resolution_mask,
+                                                   step,
+                                                   generation_config.ss_steps);
         m_impl->metrics.raw_metrics.unet_inference_durations.push_back(
             std::chrono::duration_cast<MicroSeconds>(std::chrono::steady_clock::now() - unet_start));
         ov::Tensor guided_noise = attentive_eraser::removal_guidance(
