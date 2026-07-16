@@ -18,17 +18,22 @@ dtype = torch.float16
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv=None) -> argparse.Namespace:
     """Parse and return command line arguments."""
     parser = argparse.ArgumentParser(description="SDXL Attentive Eraser with optional OpenVINO conversion")
     parser.add_argument("--convert-unet", action="store_true", help="Convert AAS-modified UNet to OpenVINO IR")
+    parser.add_argument(
+        "--export-model-only",
+        action="store_true",
+        help="Run one pipeline iteration to initialize AAS, then export only the OpenVINO UNet",
+    )
     parser.add_argument("--output-dir", type=str, default="./sdxl_atten_eraser_ov/unet", help="Output directory for OpenVINO IR (default: ./sdxl_atten_eraser_ov/unet)")
     parser.add_argument("--save-image", action="store_true", help="Save the generated inpainted image as PNG")
     parser.add_argument("--image-output-dir", type=str, default=".", help="Output directory for the generated image (default: current directory)")
     parser.add_argument("--save-intermediate", action="store_true", help="Save intermediate denoising steps")
     parser.add_argument("--intermediate-dir", type=str, default="./intermediate_steps", help="Output directory for intermediate steps (default: ./intermediate_steps)")
     parser.add_argument("--intermediate-steps", type=int, default=1, help="Save intermediate result every N steps (default: 1)")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 def create_latents_callback(save_dir, step_interval):
     """Create a callback function to save intermediate denoising steps.
@@ -240,12 +245,15 @@ def save_as_jpg(source_image_path, mask_path, source_out="source_image.png", mas
 def main():
     args = parse_args()
     output_dir = args.output_dir
-    convert_unet = args.convert_unet
-    save_image = args.save_image
+    export_model_only = args.export_model_only
+    convert_unet = args.convert_unet or export_model_only
+    save_image = args.save_image and not export_model_only
     image_output_dir = args.image_output_dir
-    save_intermediate = args.save_intermediate
+    save_intermediate = args.save_intermediate and not export_model_only
     intermediate_dir = args.intermediate_dir
     intermediate_steps = args.intermediate_steps
+    num_inference_steps = 1 if export_model_only else 50
+    strength = 1.0 if export_model_only else 0.8
 
     scheduler = DDIMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", clip_sample=False, set_alpha_to_one=False)
     pipeline = DiffusionPipeline.from_pretrained(
@@ -285,24 +293,25 @@ def main():
         height=1024,
         width=1024,
         AAS=True, # enable AAS
-        strength=0.8, # inpainting strength
+        strength=strength, # inpainting strength
         rm_guidance_scale=9, # removal guidance scale
         ss_steps = 9, # similarity suppression steps
         ss_scale = 0.3, # similarity suppression scale
         AAS_start_step=0, # AAS start step
         AAS_start_layer=34, # AAS start layer
         AAS_end_layer=70, # AAS end layer
-        num_inference_steps=50, # number of inference steps # AAS_end_step = int(strength*num_inference_steps)
+        num_inference_steps=num_inference_steps, # AAS_end_step = int(strength*num_inference_steps)
         generator=generator,
         guidance_scale=1,
         callback_on_step_end=callback_on_step_end,
         callback_on_step_end_tensor_inputs=callback_on_step_end_tensor_inputs,
     ).images[0]
 
-    output_path = Path(image_output_dir) / "removed_img_torch.png"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    image.save(str(output_path))
-    print(f"Object removal completed. Image saved to {output_path.resolve()}")
+    if not export_model_only:
+        output_path = Path(image_output_dir) / "removed_img_torch.png"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        image.save(str(output_path))
+        print(f"Object removal completed. Image saved to {output_path.resolve()}")
     
     if save_intermediate:
         print(f"Intermediate denoising steps saved to {intermediate_dir} (every {intermediate_steps} steps)")
