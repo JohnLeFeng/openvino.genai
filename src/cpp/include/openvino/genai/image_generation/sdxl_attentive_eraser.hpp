@@ -19,6 +19,7 @@ namespace genai {
 
 struct OPENVINO_GENAI_EXPORTS SDXLAttentiveEraserConfig {
     float rm_guidance_scale = 9.0f;
+    size_t ss_steps = 9;
     float strength = 0.8f;
     size_t num_inference_steps = 50;
     size_t rng_seed = 123;
