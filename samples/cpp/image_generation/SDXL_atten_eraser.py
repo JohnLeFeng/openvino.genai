@@ -11,6 +11,7 @@ from diffusers.utils import load_image
 import torch.nn.functional as F
 from torchvision.transforms.functional import to_tensor, gaussian_blur
 import argparse
+from types import MethodType
 
 
 dtype = torch.float16
@@ -95,6 +96,28 @@ def _find_aas_editor(unet):
     return None
 
 
+def _runtime_aas_masked_attention(
+    self, q, k, v, sim, attn, is_cross, place_in_unet, num_heads, is_mask_attn, mask, **kwargs
+):
+    batch = q.shape[0] // num_heads
+
+    def attention_output(attention_scores):
+        output = torch.einsum("h i j, h j d -> h i d", attention_scores, v)
+        return output.reshape(1, num_heads, batch * q.shape[1], v.shape[2]).permute(0, 2, 1, 3).reshape(
+            1, batch * q.shape[1], num_heads * v.shape[2]
+        )
+
+    if not is_mask_attn:
+        return attention_output(attn)
+
+    mask_flatten = mask.flatten(0)
+    mask_penalty = mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
+    out_bg = attention_output((sim + mask_penalty).softmax(-1))
+    out_fg = attention_output((self.ss_scale * sim + mask_penalty).softmax(-1))
+    out_fg = torch.where(self.runtime_cur_step <= self.runtime_ss_steps, out_fg, out_bg)
+    return torch.cat([out_fg, out_bg], dim=0)
+
+
 def convert_unet_to_openvino(unet, output_dir="./sdxl_atten_eraser_ov/unet", height=1024, width=1024):
     """Convert the AAS-modified SDXL UNet to OpenVINO IR (openvino_model.xml/.bin).
 
@@ -104,9 +127,8 @@ def convert_unet_to_openvino(unet, output_dir="./sdxl_atten_eraser_ov/unet", hei
     reflects only the code path taken at trace time. To capture the AAS path we
     reset the editor to its first AAS-active step before converting.
 
-    The AAS ``mask`` is exposed as a real model INPUT (not baked as a constant),
-    so the exported IR works for any mask. Only the step/layer switches (e.g.
-    ``ss_steps``) remain frozen at trace time.
+    The AAS ``mask``, ``cur_step``, and ``ss_steps`` values are exposed as real
+    model inputs. The AAS layer range remains fixed at conversion time.
 
     SDXL's UNet also expects ``added_cond_kwargs`` (a dict with ``text_embeds``
     and ``time_ids``); we wrap it to flatten that dict into explicit tensors.
@@ -124,6 +146,7 @@ def convert_unet_to_openvino(unet, output_dir="./sdxl_atten_eraser_ov/unet", hei
         editor.reset()
         editor.cur_step = editor.start_step
         editor.cur_att_layer = 0
+        editor.attn_batch = MethodType(_runtime_aas_masked_attention, editor)
         print(f"AAS editor found; tracing at cur_step={editor.cur_step} (AAS active).")
     else:
         print("Warning: no AAS editor found on UNet; exporting the plain attention path.")
@@ -134,7 +157,7 @@ def convert_unet_to_openvino(unet, output_dir="./sdxl_atten_eraser_ov/unet", hei
             self.unet = unet
             self.editor = editor
 
-        def forward(self, sample, timestep, encoder_hidden_states, text_embeds, time_ids, mask):
+        def forward(self, sample, timestep, encoder_hidden_states, text_embeds, time_ids, mask, cur_step, ss_steps):
             # Feed the AAS mask as a real graph INPUT instead of a baked constant.
             # Recomputing the per-resolution masks from `mask` here keeps them tied
             # to the input node, so the exported IR works for ANY mask, not just the
@@ -148,6 +171,8 @@ def convert_unet_to_openvino(unet, output_dir="./sdxl_atten_eraser_ov/unet", hei
                 self.editor.mask_32 = F.max_pool2d(mask, (height // 32, width // 32)).round().squeeze().squeeze()
                 self.editor.mask_64 = F.max_pool2d(mask, (height // 64, width // 64)).round().squeeze().squeeze()
                 self.editor.mask_128 = F.max_pool2d(mask, (height // 128, width // 128)).round().squeeze().squeeze()
+                self.editor.runtime_cur_step = cur_step
+                self.editor.runtime_ss_steps = ss_steps
             return self.unet(
                 sample,
                 timestep,
@@ -168,6 +193,8 @@ def convert_unet_to_openvino(unet, output_dir="./sdxl_atten_eraser_ov/unet", hei
         "time_ids": torch.randn(batch, 6, dtype=p_dtype, device=p_device),
         # AAS mask input (full resolution, values in {0, 1}); downsampled inside forward.
         "mask": torch.randint(0, 2, (1, 1, height, width)).to(dtype=p_dtype, device=p_device),
+        "cur_step": torch.tensor(0, dtype=torch.int64, device=p_device),
+        "ss_steps": torch.tensor(9, dtype=torch.int64, device=p_device),
     }
 
     wrapper = UNetWrapper(unet, editor)
