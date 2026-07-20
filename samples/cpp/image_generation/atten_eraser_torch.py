@@ -292,8 +292,8 @@ def main():
         print(f"Error: Invalid model_type '{args.model_type}'. Must be one of {list(MODEL_CONFIG.keys())}.")
         return 1
     model_config = MODEL_CONFIG[args.model_type]
-    export_dir = Path(MODEL_CONFIG["export_dir"])
-    output_dir = Path(MODEL_CONFIG["output_dir"])
+    export_dir = Path(model_config["export_dir"])
+    output_dir = Path(model_config["output_dir"])
     intermediate_dir = output_dir / "intermediate_results"
     export_model_only = args.export_model_only
     convert_unet = args.convert_unet or export_model_only
