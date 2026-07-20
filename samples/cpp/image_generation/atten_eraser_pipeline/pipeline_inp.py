@@ -48,7 +48,7 @@ logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 #
 # From https://github.com/huggingface/diffusers/blob/main/examples/community/pipeline_stable_diffusion_xl_attentive_eraser.py#L148-L174
-# 
+#
 class AttentionBase:
     def __init__(self):
         self.cur_step = 0
@@ -81,7 +81,7 @@ class AttentionBase:
 #
 # From https://github.com/Alibaba-VELLDEPTH/AttentiveEraser/blob/master/AAS/AAS.py#L11-L117
 # Rename to AAS_Base to avoid name conflict with AAS class in pipeline_inp.py
-# 
+#
 class AAS_Base(AttentionBase):
     MODEL_TYPE = {"SD": 16, "SDXL": 70}
 
@@ -1818,7 +1818,7 @@ class StableDiffusionInpaintPipeline(
                 self.latent2image(img[-1:], return_type="pt", generator=generator) for img in latents_list_denoise
             ]
             return image, pred_x0_list_denoise, latents_list_denoise
-        
+
         # Convert tensor to PIL images
         if isinstance(image, torch.Tensor):
             # image is in range [0, 1] from latent2image
@@ -1827,8 +1827,8 @@ class StableDiffusionInpaintPipeline(
             image_list = [PIL.Image.fromarray(img) for img in image_np]
         else:
             image_list = image if isinstance(image, list) else [image]
-        
+
         if not return_dict:
             return (image_list,)
-        
+
         return StableDiffusionPipelineOutput(images=image_list, nsfw_content_detected=False)
