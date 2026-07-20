@@ -36,6 +36,7 @@ MODEL_CONFIG = {
         "AAS_end_layer": 16,  # AAS end layer,
         "ss_steps": 9,  # similarity suppression steps
         "ss_scale": 0.3,  # similarity suppression scale
+        "rm_guidance_scale": 9.0,  # removal guidance scale
         "export_dir": "./sd2_atten_eraser_ov/unet",  # Output directory for OpenVINO IR
         "output_dir": "./sd2_atten_eraser_results/torch",  # Output directory for generated images
     },
@@ -52,6 +53,7 @@ MODEL_CONFIG = {
         "AAS_end_layer": 70,  # AAS end layer
         "ss_steps": 9,  # similarity suppression steps
         "ss_scale": 0.3,  # similarity suppression scale
+        "rm_guidance_scale": 9.0,  # removal guidance scale
         "export_dir": "./sdxl_atten_eraser_ov/unet",  # Output directory for OpenVINO IR
         "output_dir": "./sdxl_atten_eraser_results/torch",  # Output directory for generated images
     },
