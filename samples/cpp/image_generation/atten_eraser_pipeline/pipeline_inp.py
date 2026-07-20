@@ -42,15 +42,28 @@ from diffusers.examples.community.pipeline_stable_diffusion_xl_attentive_eraser 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
-# 
+#
 # From https://github.com/Alibaba-VELLDEPTH/AttentiveEraser/blob/master/AAS/AAS.py#L11-L117
-#  
+#
 class AAS(AttentionBase):
-    MODEL_TYPE = {
-        "SD": 16,
-        "SDXL": 70
-    }
-    def __init__(self, attnstore=None,start_step=4, end_step= 50, start_layer=10, end_layer=16,layer_idx=None, step_idx=None, total_steps=50,  mask=None, mask_save_dir=None, model_type="SD",ss_steps=9,ss_scale=1.0):
+    MODEL_TYPE = {"SD": 16, "SDXL": 70}
+
+    def __init__(
+        self,
+        attnstore=None,
+        start_step=4,
+        end_step=50,
+        start_layer=10,
+        end_layer=16,
+        layer_idx=None,
+        step_idx=None,
+        total_steps=50,
+        mask=None,
+        mask_save_dir=None,
+        model_type="SD",
+        ss_steps=9,
+        ss_scale=1.0,
+    ):
         """
         Args:
             start_step: the step to start AAS
@@ -78,23 +91,23 @@ class AAS(AttentionBase):
         print("AAS at denoising steps: ", self.step_idx)
         print("AAS at U-Net layers: ", self.layer_idx)
         print("start AAS")
-        self.mask_8 = F.max_pool2d(mask,(512//8,512//8)).round().squeeze().squeeze()
-        self.mask_16 = F.max_pool2d(mask,(512//16,512//16)).round().squeeze().squeeze()
-        self.mask_32 = F.max_pool2d(mask,(512//32,512//32)).round().squeeze().squeeze()
-        self.mask_64 = F.max_pool2d(mask,(512//64,512//64)).round().squeeze().squeeze()
+        self.mask_8 = F.max_pool2d(mask, (512 // 8, 512 // 8)).round().squeeze().squeeze()
+        self.mask_16 = F.max_pool2d(mask, (512 // 16, 512 // 16)).round().squeeze().squeeze()
+        self.mask_32 = F.max_pool2d(mask, (512 // 32, 512 // 32)).round().squeeze().squeeze()
+        self.mask_64 = F.max_pool2d(mask, (512 // 64, 512 // 64)).round().squeeze().squeeze()
         # if mask_save_dir is not None:
         #     os.makedirs(mask_save_dir, exist_ok=True)
         #     save_image(self.mask.unsqueeze(0).unsqueeze(0), os.path.join(mask_save_dir, "mask.png"))
-    
-    def attn_batch(self, q, k, v, sim, attn, is_cross, place_in_unet, num_heads,is_mask_attn, mask, **kwargs):
+
+    def attn_batch(self, q, k, v, sim, attn, is_cross, place_in_unet, num_heads, is_mask_attn, mask, **kwargs):
         B = q.shape[0] // num_heads
         if is_mask_attn:
-            mask_flatten = mask.flatten(0)                
-            if self.cur_step <= self.ss_steps:                                                                                                                                                                                                                                                               
+            mask_flatten = mask.flatten(0)
+            if self.cur_step <= self.ss_steps:
                 # background
-                sim_bg = sim + mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min) 
-                #object
-                sim_fg = self.ss_scale*sim
+                sim_bg = sim + mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
+                # object
+                sim_fg = self.ss_scale * sim
                 sim_fg += mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
 
                 sim = torch.cat([sim_fg, sim_bg], dim=0)
@@ -105,7 +118,7 @@ class AAS(AttentionBase):
         attn = sim.softmax(-1)
         ## attn store
         if self.attnstore is not None:
-            self.attnstore(attn,is_cross,place_in_unet,self.cur_step)
+            self.attnstore(attn, is_cross, place_in_unet, self.cur_step)
 
         if len(attn) == 2 * len(v):
             v = torch.cat([v] * 2)
@@ -122,7 +135,7 @@ class AAS(AttentionBase):
 
         B = q.shape[0] // num_heads // 2
         H = W = int(np.sqrt(q.shape[1]))
-        
+
         if H == 16:
             mask = self.mask_16.to(sim.device)
         elif H == 32:
@@ -132,15 +145,28 @@ class AAS(AttentionBase):
         else:
             mask = self.mask_64.to(sim.device)
 
-        
         q_wo, q_w = q.chunk(2)
         k_wo, k_w = k.chunk(2)
         v_wo, v_w = v.chunk(2)
         sim_wo, sim_w = sim.chunk(2)
         attn_wo, attn_w = attn.chunk(2)
 
-        out_source = self.attn_batch(q_wo, k_wo, v_wo, sim_wo, attn_wo, is_cross, place_in_unet, num_heads,is_mask_attn=False,mask=None,**kwargs)
-        out_target = self.attn_batch(q_w, k_w, v_w, sim_w, attn_w, is_cross, place_in_unet, num_heads, is_mask_attn=True, mask = mask, **kwargs)
+        out_source = self.attn_batch(
+            q_wo,
+            k_wo,
+            v_wo,
+            sim_wo,
+            attn_wo,
+            is_cross,
+            place_in_unet,
+            num_heads,
+            is_mask_attn=False,
+            mask=None,
+            **kwargs,
+        )
+        out_target = self.attn_batch(
+            q_w, k_w, v_w, sim_w, attn_w, is_cross, place_in_unet, num_heads, is_mask_attn=True, mask=mask, **kwargs
+        )
 
         if self.mask is not None:
             if out_target.shape[0] == 2:
@@ -149,7 +175,7 @@ class AAS(AttentionBase):
                 out_target = out_target_fg * mask + out_target_bg * (1 - mask)
             else:
                 out_target = out_target
-        
+
         out = torch.cat([out_source, out_target], dim=0)
         return out
 
@@ -592,9 +618,7 @@ class StableDiffusionInpaintPipeline(
             if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not torch.equal(
                 text_input_ids, untruncated_ids
             ):
-                removed_text = self.tokenizer.batch_decode(
-                    untruncated_ids[:, self.tokenizer.model_max_length - 1 : -1]
-                )
+                removed_text = self.tokenizer.batch_decode(untruncated_ids[:, self.tokenizer.model_max_length - 1 : -1])
                 logger.warning(
                     "The following part of your input was truncated because CLIP can only handle sequences up to"
                     f" {self.tokenizer.model_max_length} tokens: {removed_text}"
@@ -832,8 +856,7 @@ class StableDiffusionInpaintPipeline(
 
         if callback_steps is not None and (not isinstance(callback_steps, int) or callback_steps <= 0):
             raise ValueError(
-                f"`callback_steps` has to be a positive integer but is {callback_steps} of type"
-                f" {type(callback_steps)}."
+                f"`callback_steps` has to be a positive integer but is {callback_steps} of type {type(callback_steps)}."
             )
 
         if callback_on_step_end_tensor_inputs is not None and not all(
@@ -871,7 +894,7 @@ class StableDiffusionInpaintPipeline(
         if padding_mask_crop is not None:
             if not isinstance(image, PIL.Image.Image):
                 raise ValueError(
-                    f"The image should be a PIL image when inpainting mask crop, but is of type" f" {type(image)}."
+                    f"The image should be a PIL image when inpainting mask crop, but is of type {type(image)}."
                 )
             if not isinstance(mask_image, PIL.Image.Image):
                 raise ValueError(
@@ -879,7 +902,7 @@ class StableDiffusionInpaintPipeline(
                     f" {type(mask_image)}."
                 )
             if output_type != "pil":
-                raise ValueError(f"The output type should be PIL when inpainting mask crop, but is" f" {output_type}.")
+                raise ValueError(f"The output type should be PIL when inpainting mask crop, but is {output_type}.")
 
         if ip_adapter_image is not None and ip_adapter_image_embeds is not None:
             raise ValueError(
@@ -974,13 +997,13 @@ class StableDiffusionInpaintPipeline(
         # resize the mask to latents shape as we concatenate the mask to the latents
         # we do that before converting to dtype to avoid breaking in case we're using cpu_offload
         # and half precision
-         
-        #mask = torch.nn.functional.interpolate(
+
+        # mask = torch.nn.functional.interpolate(
         #    mask, size=(height // self.vae_scale_factor, width // self.vae_scale_factor)
-        #)
-        #mask[mask < 0.1] = 0
-        #mask[mask >= 0.1] = 1
-        mask = torch.nn.functional.max_pool2d(mask, (8,8))
+        # )
+        # mask[mask < 0.1] = 0
+        # mask[mask >= 0.1] = 1
+        mask = torch.nn.functional.max_pool2d(mask, (8, 8))
         mask = mask.to(device=device, dtype=dtype)
 
         masked_image = masked_image.to(device=device, dtype=dtype)
@@ -1084,12 +1107,12 @@ class StableDiffusionInpaintPipeline(
     @property
     def interrupt(self):
         return self._interrupt
-                  
+
     @torch.no_grad()
-    def latent2image(self, latents, generator: torch.Generator,return_type='np'):
+    def latent2image(self, latents, generator: torch.Generator, return_type="np"):
         latents = 1 / self.vae.config.scaling_factor * latents.detach()
-        image = self.vae.decode(latents,generator=generator)['sample']
-        if return_type == 'np':
+        image = self.vae.decode(latents, generator=generator)["sample"]
+        if return_type == "np":
             image = (image / 2 + 0.5).clamp(0, 1)
             image = image.cpu().permute(0, 2, 3, 1).numpy()[0]
             image = (image * 255).astype(np.uint8)
@@ -1097,6 +1120,7 @@ class StableDiffusionInpaintPipeline(
             image = (image / 2 + 0.5).clamp(0, 1)
 
         return image
+
     """           
     @torch.no_grad()
     def latent2image(self, latents, generator: torch.Generator,return_type='np'):
@@ -1111,6 +1135,7 @@ class StableDiffusionInpaintPipeline(
 
         return image
  """
+
     def step(
         self,
         model_output: torch.FloatTensor,
@@ -1123,17 +1148,18 @@ class StableDiffusionInpaintPipeline(
         """
         prev_timestep = timestep - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps
         alpha_prod_t = self.scheduler.alphas_cumprod[timestep]
-        alpha_prod_t_prev = self.scheduler.alphas_cumprod[prev_timestep] if prev_timestep > 0 else self.scheduler.final_alpha_cumprod
+        alpha_prod_t_prev = (
+            self.scheduler.alphas_cumprod[prev_timestep] if prev_timestep > 0 else self.scheduler.final_alpha_cumprod
+        )
         beta_prod_t = 1 - alpha_prod_t
         pred_x0 = (x - beta_prod_t**0.5 * model_output) / alpha_prod_t**0.5
         if model_opt_output is not None:
-            pred_dir = (1 - alpha_prod_t_prev)**0.5 * model_opt_output
-        pred_dir = (1 - alpha_prod_t_prev)**0.5 * model_output
-
+            pred_dir = (1 - alpha_prod_t_prev) ** 0.5 * model_opt_output
+        pred_dir = (1 - alpha_prod_t_prev) ** 0.5 * model_output
 
         x_prev = alpha_prod_t_prev**0.5 * pred_x0 + pred_dir
         return x_prev, pred_x0
-    
+
     @torch.no_grad()
     def __call__(
         self,
@@ -1430,7 +1456,7 @@ class StableDiffusionInpaintPipeline(
             image, height=height, width=width, crops_coords=crops_coords, resize_mode=resize_mode
         )
         init_image = init_image.to(dtype=torch.float32)
-        #init_image = init_image.to(dtype=torch.float16)
+        # init_image = init_image.to(dtype=torch.float16)
 
         # 6. Prepare latent variables
         num_channels_latents = self.vae.config.latent_channels
@@ -1490,7 +1516,7 @@ class StableDiffusionInpaintPipeline(
                     f"Incorrect configuration settings! The config of `pipeline.unet`: {self.unet.config} expects"
                     f" {self.unet.config.in_channels} but received `num_channels_latents`: {num_channels_latents} +"
                     f" `num_channels_mask`: {num_channels_mask} + `num_channels_masked_image`: {num_channels_masked_image}"
-                    f" = {num_channels_latents+num_channels_masked_image+num_channels_mask}. Please verify the config of"
+                    f" = {num_channels_latents + num_channels_masked_image + num_channels_mask}. Please verify the config of"
                     " `pipeline.unet` or your `mask_image` or `image` input."
                 )
         elif num_channels_unet != 4:
@@ -1536,8 +1562,8 @@ class StableDiffusionInpaintPipeline(
         # 10. Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
         self._num_timesteps = len(timesteps)
-        #with self.progress_bar(total=num_inference_steps) as progress_bar:
-        prompt_embeds = torch.cat([prompt_embeds,prompt_embeds])
+        # with self.progress_bar(total=num_inference_steps) as progress_bar:
+        prompt_embeds = torch.cat([prompt_embeds, prompt_embeds])
         latents_list_denoise = [latents]
         pred_x0_list_denoise = []
         for i, t in enumerate(timesteps):
@@ -1560,11 +1586,11 @@ class StableDiffusionInpaintPipeline(
 
             # perform removal guidance
             latent_model_input_rm = torch.cat([latents] * 2)
-            
+
             # concat latents, mask, masked_image_latents in the channel dimension
-            #latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+            # latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
             latent_model_input = self.scheduler.scale_model_input(latent_model_input_rm, t)
-            
+
             if num_channels_unet == 9:
                 latent_model_input = torch.cat([latent_model_input, mask, masked_image_latents], dim=1)
 
@@ -1586,7 +1612,7 @@ class StableDiffusionInpaintPipeline(
 
             # perform removal guidance
             noise_pred_wo, noise_pred_w = noise_pred.chunk(2)
-            
+
             delta = noise_pred_w - noise_pred_wo
             """              
             #if i >= 9 and i <= 13:
@@ -1594,17 +1620,17 @@ class StableDiffusionInpaintPipeline(
                 rm_guidance_scale = 9 #9
             else:
                 rm_guidance_scale = self.rm_guidance_scale  """
-            
-            #noise_pred = noise_pred_wo + rm_guidance_scale * delta
+
+            # noise_pred = noise_pred_wo + rm_guidance_scale * delta
             noise_pred = noise_pred_wo + self.rm_guidance_scale * delta
 
             # compute the previous noisy sample x_t -> x_t-1
-            #latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
+            # latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
             latents, pred_x0 = self.step(noise_pred, t, latents, model_opt_output=None)
-            
+
             latents_list_denoise.append(latents)
             pred_x0_list_denoise.append(pred_x0)
-                        
+
             if num_channels_unet == 4:
                 init_latents_proper = image_latents
                 if self.do_classifier_free_guidance:
@@ -1619,7 +1645,7 @@ class StableDiffusionInpaintPipeline(
                     )
 
                 latents = (1 - init_mask) * init_latents_proper + init_mask * latents
-            
+
             if callback_on_step_end is not None:
                 callback_kwargs = {}
                 for k in callback_on_step_end_tensor_inputs:
@@ -1634,7 +1660,7 @@ class StableDiffusionInpaintPipeline(
 
             # call the callback, if provided
             if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
-            #    progress_bar.update()
+                #    progress_bar.update()
                 pass
                 if callback is not None and i % callback_steps == 0:
                     step_idx = i // getattr(self.scheduler, "order", 1)
@@ -1673,11 +1699,15 @@ class StableDiffusionInpaintPipeline(
             return (image, has_nsfw_concept)
 
         return StableDiffusionPipelineOutput(images=image, nsfw_content_detected=has_nsfw_concept)  """
- 
-        #latents = latents * test_mask + x0_latents * (1 - test_mask)
+
+        # latents = latents * test_mask + x0_latents * (1 - test_mask)
         image = self.latent2image(latents, return_type="pt", generator=generator)
         if return_intermediates:
-            pred_x0_list_denoise = [self.latent2image(img[-1:], return_type="pt",generator=generator) for img in pred_x0_list_denoise]
-            latents_list_denoise = [self.latent2image(img[-1:], return_type="pt",generator=generator) for img in latents_list_denoise]
+            pred_x0_list_denoise = [
+                self.latent2image(img[-1:], return_type="pt", generator=generator) for img in pred_x0_list_denoise
+            ]
+            latents_list_denoise = [
+                self.latent2image(img[-1:], return_type="pt", generator=generator) for img in latents_list_denoise
+            ]
             return image, pred_x0_list_denoise, latents_list_denoise
         return image
