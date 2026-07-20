@@ -19,41 +19,41 @@ device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cp
 
 
 MODEL_CONFIG = {
-    "SD2" : {
-        "model_name": "stabilityai/stable-diffusion-2-1-base", 
+    "SD2": {
+        "model_name": "stabilityai/stable-diffusion-2-1-base",
         "pipeline": StableDiffusionInpaintPipeline,
         "custom_pipeline": "./atten_eraser_pipeline/pipeline_inp.py",
-        "height": 512, 
+        "height": 512,
         "width": 512,
         "source_image_path": "https://raw.githubusercontent.com/Alibaba-VELLDEPTH/AttentiveEraser/refs/heads/master/examples/img/an.png",
         "mask_path": "https://raw.githubusercontent.com/Alibaba-VELLDEPTH/AttentiveEraser/refs/heads/master/examples/mask/an_mask.png",
-        "AAS_start_step": 0, # AAS start step
-        # 
+        "AAS_start_step": 0,  # AAS start step
+        #
         # 0~5down,6mid,7~15up /layer that starting AAS
         # From: https://github.com/Alibaba-VELLDEPTH/AttentiveEraser/blob/master/notebook/Attentive_Eraser_SIP.ipynb
-        # 
-        "AAS_start_layer": 7, # AAS start layer, 
-        "AAS_end_layer": 16, # AAS end layer,
-        "ss_steps": 9, # similarity suppression steps
-        "ss_scale": 0.3, # similarity suppression scale
-        "export_dir": "./sd2_atten_eraser_ov/unet", # Output directory for OpenVINO IR
-        "output_dir": "./sd2_atten_eraser_results/torch", # Output directory for generated images
+        #
+        "AAS_start_layer": 7,  # AAS start layer,
+        "AAS_end_layer": 16,  # AAS end layer,
+        "ss_steps": 9,  # similarity suppression steps
+        "ss_scale": 0.3,  # similarity suppression scale
+        "export_dir": "./sd2_atten_eraser_ov/unet",  # Output directory for OpenVINO IR
+        "output_dir": "./sd2_atten_eraser_results/torch",  # Output directory for generated images
     },
     "SDXL": {
         "model_name": "stabilityai/stable-diffusion-xl-base-1.0",
         "pipeline": DiffusionPipeline,
         "custom_pipeline": "pipeline_stable_diffusion_xl_attentive_eraser",
-        "height": 1024, 
+        "height": 1024,
         "width": 1024,
         "source_image_path": "https://raw.githubusercontent.com/Anonym0u3/Images/refs/heads/main/an1024.png",
         "mask_path": "https://raw.githubusercontent.com/Anonym0u3/Images/refs/heads/main/an1024_mask.png",
-        "AAS_start_step": 0, # AAS start step
-        "AAS_start_layer": 34, # AAS start layer
-        "AAS_end_layer": 70, # AAS end layer
-        "ss_steps": 9, # similarity suppression steps
-        "ss_scale": 0.3, # similarity suppression scale
-        "export_dir": "./sdxl_atten_eraser_ov/unet", # Output directory for OpenVINO IR
-        "output_dir": "./sdxl_atten_eraser_results/torch", # Output directory for generated images
+        "AAS_start_step": 0,  # AAS start step
+        "AAS_start_layer": 34,  # AAS start layer
+        "AAS_end_layer": 70,  # AAS end layer
+        "ss_steps": 9,  # similarity suppression steps
+        "ss_scale": 0.3,  # similarity suppression scale
+        "export_dir": "./sdxl_atten_eraser_ov/unet",  # Output directory for OpenVINO IR
+        "output_dir": "./sdxl_atten_eraser_results/torch",  # Output directory for generated images
     },
 }
 
@@ -61,7 +61,9 @@ MODEL_CONFIG = {
 def parse_args(argv=None) -> argparse.Namespace:
     """Parse and return command line arguments."""
     parser = argparse.ArgumentParser(description="SDXL Attentive Eraser with optional OpenVINO conversion")
-    parser.add_argument("--model_type", type=str, choices=["SD2", "SDXL"], default="SDXL", help="Model to use (default: SDXL)")
+    parser.add_argument(
+        "--model_type", type=str, choices=["SD2", "SDXL"], default="SDXL", help="Model to use (default: SDXL)"
+    )
     parser.add_argument("--convert-unet", action="store_true", help="Convert AAS-modified UNet to OpenVINO IR")
     parser.add_argument(
         "--export-model-only",
@@ -70,21 +72,24 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument("--save-image", action="store_true", help="Save the generated inpainted image as PNG")
     parser.add_argument("--save-intermediate", action="store_true", help="Save intermediate denoising steps")
-    parser.add_argument("--intermediate-steps", type=int, default=1, help="Save intermediate result every N steps (default: 1)")
+    parser.add_argument(
+        "--intermediate-steps", type=int, default=1, help="Save intermediate result every N steps (default: 1)"
+    )
     return parser.parse_args(argv)
+
 
 def create_latents_callback(save_dir, step_interval):
     """Create a callback function to save intermediate denoising steps.
-    
+
     Args:
         save_dir: Directory to save intermediate images
         step_interval: Save every N steps
-    
+
     Returns:
         Callback function for use with diffusers pipeline
     """
     Path(save_dir).mkdir(parents=True, exist_ok=True)
-    
+
     def latents_callback(pipe, step, timestep, callback_kwargs):
         """Save intermediate latents as decoded images."""
         if step % step_interval == 0:
@@ -118,7 +123,7 @@ def create_latents_callback(save_dir, step_interval):
             pil_image.save(str(img_path))
 
         return callback_kwargs
-    
+
     return latents_callback
 
 
@@ -146,8 +151,10 @@ def _runtime_aas_masked_attention(
 
     def attention_output(attention_scores):
         output = torch.einsum("h i j, h j d -> h i d", attention_scores, v)
-        return output.reshape(1, num_heads, batch * q.shape[1], v.shape[2]).permute(0, 2, 1, 3).reshape(
-            1, batch * q.shape[1], num_heads * v.shape[2]
+        return (
+            output.reshape(1, num_heads, batch * q.shape[1], v.shape[2])
+            .permute(0, 2, 1, 3)
+            .reshape(1, batch * q.shape[1], num_heads * v.shape[2])
         )
 
     if not is_mask_attn:
@@ -226,7 +233,7 @@ def convert_unet_to_openvino(unet, export_dir="./sdxl_atten_eraser_ov/unet", hei
 
     latent_h, latent_w = height // 8, width // 8
     batch = 2  # classifier-free guidance doubles the batch
-    cross_attention_dim = unet.config.cross_attention_dim          # 2048 for SDXL base
+    cross_attention_dim = unet.config.cross_attention_dim  # 2048 for SDXL base
 
     example_input = {
         "sample": torch.randn(batch, unet.config.in_channels, latent_h, latent_w, dtype=p_dtype, device=p_device),
@@ -252,7 +259,7 @@ def convert_unet_to_openvino(unet, export_dir="./sdxl_atten_eraser_ov/unet", hei
 
 def preprocess_image(image_path, device):
     image = to_tensor((load_image(image_path)))
-    image = image.unsqueeze_(0).float() * 2 - 1 # [0,1] --> [-1,1]
+    image = image.unsqueeze_(0).float() * 2 - 1  # [0,1] --> [-1,1]
     if image.shape[1] != 3:
         image = image.expand(-1, 3, -1, -1)
     image = F.interpolate(image, (1024, 1024))
@@ -261,7 +268,7 @@ def preprocess_image(image_path, device):
 
 
 def preprocess_mask(mask_path, device):
-    mask = to_tensor((load_image(mask_path, convert_method=lambda img: img.convert('L'))))
+    mask = to_tensor((load_image(mask_path, convert_method=lambda img: img.convert("L"))))
     mask = mask.unsqueeze_(0).float()  # 0 or 1
     mask = F.interpolate(mask, (1024, 1024))
     mask = gaussian_blur(mask, kernel_size=(77, 77))
@@ -296,18 +303,24 @@ def main():
     num_inference_steps = 1 if export_model_only else 50
     strength = 1.0 if export_model_only else 0.8
 
-    scheduler = DDIMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", clip_sample=False, set_alpha_to_one=False)
-    pipeline = model_config["pipeline"].from_pretrained(
-        model_config["model_name"],
-        custom_pipeline=model_config["custom_pipeline"],
-        scheduler=scheduler,
-        variant="fp16",
-        use_safetensors=True,
-        torch_dtype=dtype,
-    ).to(device)
+    scheduler = DDIMScheduler(
+        beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", clip_sample=False, set_alpha_to_one=False
+    )
+    pipeline = (
+        model_config["pipeline"]
+        .from_pretrained(
+            model_config["model_name"],
+            custom_pipeline=model_config["custom_pipeline"],
+            scheduler=scheduler,
+            variant="fp16",
+            use_safetensors=True,
+            torch_dtype=dtype,
+        )
+        .to(device)
+    )
 
-    prompt = "" # Set prompt to null
-    seed=123 
+    prompt = ""  # Set prompt to null
+    seed = 123
     generator = torch.Generator(device=device).manual_seed(seed)
     source_image_path = model_config["source_image_path"]
     mask_path = model_config["mask_path"]
@@ -325,23 +338,23 @@ def main():
     callback_on_step_end_tensor_inputs = None
     if save_intermediate:
         callback_on_step_end = create_latents_callback(intermediate_dir, intermediate_steps)
-        callback_on_step_end_tensor_inputs=["latents"]
+        callback_on_step_end_tensor_inputs = ["latents"]
 
     image = pipeline(
-        prompt=prompt, 
+        prompt=prompt,
         image=source_image,
         mask_image=mask,
         height=1024,
         width=1024,
-        AAS=True, # enable AAS
-        strength=strength, # inpainting strength
-        rm_guidance_scale=model_config["rm_guidance_scale"], # removal guidance scale
-        ss_steps = model_config["ss_steps"], # similarity suppression steps
-        ss_scale = model_config["ss_scale"], # similarity suppression scale
-        AAS_start_step=model_config["AAS_start_step"], # AAS start step
-        AAS_start_layer=model_config["AAS_start_layer"], # AAS start layer
-        AAS_end_layer=model_config["AAS_end_layer"], # AAS end layer
-        num_inference_steps=num_inference_steps, # AAS_end_step = int(strength*num_inference_steps)
+        AAS=True,  # enable AAS
+        strength=strength,  # inpainting strength
+        rm_guidance_scale=model_config["rm_guidance_scale"],  # removal guidance scale
+        ss_steps=model_config["ss_steps"],  # similarity suppression steps
+        ss_scale=model_config["ss_scale"],  # similarity suppression scale
+        AAS_start_step=model_config["AAS_start_step"],  # AAS start step
+        AAS_start_layer=model_config["AAS_start_layer"],  # AAS start layer
+        AAS_end_layer=model_config["AAS_end_layer"],  # AAS end layer
+        num_inference_steps=num_inference_steps,  # AAS_end_step = int(strength*num_inference_steps)
         generator=generator,
         guidance_scale=1,
         callback_on_step_end=callback_on_step_end,
@@ -353,17 +366,20 @@ def main():
         output_image_path = output_dir / "result.png"
         image.save(output_image_path)
         print(f"Object removal completed. Image saved to {output_image_path}")
-    
+
     if save_intermediate:
         print(f"Intermediate denoising steps saved to {intermediate_dir} (every {intermediate_steps} steps)")
 
     # Convert the AAS-modified UNet to OpenVINO IR after generation (if --convert-unet flag is set).
     if convert_unet:
-        convert_unet_to_openvino(pipeline.unet, export_dir=export_dir, height=model_config["height"], width=model_config["width"])
+        convert_unet_to_openvino(
+            pipeline.unet, export_dir=export_dir, height=model_config["height"], width=model_config["width"]
+        )
     else:
         print("Skipping UNet conversion (use --convert-unet to enable)")
 
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())
