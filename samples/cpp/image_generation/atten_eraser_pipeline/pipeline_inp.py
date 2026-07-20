@@ -23,8 +23,12 @@ from typing import Any, Callable, Dict, List, Optional, Union
 import numpy as np
 import PIL.Image
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from packaging import version
 from transformers import CLIPImageProcessor, CLIPTextModel, CLIPTokenizer, CLIPVisionModelWithProjection
+
+from einops import rearrange, repeat
 
 from diffusers.configuration_utils import FrozenDict
 from diffusers.image_processor import PipelineImageInput, VaeImageProcessor
@@ -37,15 +41,48 @@ from diffusers.utils.torch_utils import randn_tensor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline, StableDiffusionMixin
 from diffusers.pipelines.stable_diffusion.pipeline_output import StableDiffusionPipelineOutput
 from diffusers.pipelines.stable_diffusion.safety_checker import StableDiffusionSafetyChecker
-from diffusers.examples.community.pipeline_stable_diffusion_xl_attentive_eraser import AttentionBase
+
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
 #
-# From https://github.com/Alibaba-VELLDEPTH/AttentiveEraser/blob/master/AAS/AAS.py#L11-L117
+# From https://github.com/huggingface/diffusers/blob/main/examples/community/pipeline_stable_diffusion_xl_attentive_eraser.py#L148-L174
+# 
+class AttentionBase:
+    def __init__(self):
+        self.cur_step = 0
+        self.num_att_layers = -1
+        self.cur_att_layer = 0
+
+    def after_step(self):
+        pass
+
+    def __call__(self, q, k, v, sim, attn, is_cross, place_in_unet, num_heads, **kwargs):
+        out = self.forward(q, k, v, sim, attn, is_cross, place_in_unet, num_heads, **kwargs)
+        self.cur_att_layer += 1
+        if self.cur_att_layer == self.num_att_layers:
+            self.cur_att_layer = 0
+            self.cur_step += 1
+            # after step
+            self.after_step()
+        return out
+
+    def forward(self, q, k, v, sim, attn, is_cross, place_in_unet, num_heads, **kwargs):
+        out = torch.einsum("b i j, b j d -> b i d", attn, v)
+        out = rearrange(out, "(b h) n d -> b n (h d)", h=num_heads)
+        return out
+
+    def reset(self):
+        self.cur_step = 0
+        self.cur_att_layer = 0
+
+
 #
-class AAS(AttentionBase):
+# From https://github.com/Alibaba-VELLDEPTH/AttentiveEraser/blob/master/AAS/AAS.py#L11-L117
+# Rename to AAS_Base to avoid name conflict with AAS class in pipeline_inp.py
+# 
+class AAS_Base(AttentionBase):
     MODEL_TYPE = {"SD": 16, "SDXL": 70}
 
     def __init__(
@@ -1089,6 +1126,10 @@ class StableDiffusionInpaintPipeline(
     def clip_skip(self):
         return self._clip_skip
 
+    @property
+    def do_self_attention_redirection_guidance(self):  # AAS
+        return self._rm_guidance_scale > 1 and self._AAS
+
     # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
     # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
     # corresponds to doing no classifier free guidance.
@@ -1159,6 +1200,72 @@ class StableDiffusionInpaintPipeline(
 
         x_prev = alpha_prod_t_prev**0.5 * pred_x0 + pred_dir
         return x_prev, pred_x0
+
+    def regiter_attention_editor_diffusers(self, unet, editor: AttentionBase):
+        """
+        Register a attention editor to Diffuser Pipeline, refer from [Prompt-to-Prompt]
+        """
+
+        def ca_forward(self, place_in_unet):
+            def forward(x, encoder_hidden_states=None, attention_mask=None, context=None, mask=None):
+                """
+                The attention is similar to the original implementation of LDM CrossAttention class
+                except adding some modifications on the attention
+                """
+                if encoder_hidden_states is not None:
+                    context = encoder_hidden_states
+                if attention_mask is not None:
+                    mask = attention_mask
+
+                to_out = self.to_out
+                if isinstance(to_out, nn.modules.container.ModuleList):
+                    to_out = self.to_out[0]
+                else:
+                    to_out = self.to_out
+
+                h = self.heads
+                q = self.to_q(x)
+                is_cross = context is not None
+                context = context if is_cross else x
+                k = self.to_k(context)
+                v = self.to_v(context)
+                q, k, v = (rearrange(t, "b n (h d) -> (b h) n d", h=h) for t in (q, k, v))
+
+                sim = torch.einsum("b i d, b j d -> b i j", q, k) * self.scale
+
+                if mask is not None:
+                    mask = rearrange(mask, "b ... -> b (...)")
+                    max_neg_value = -torch.finfo(sim.dtype).max
+                    mask = repeat(mask, "b j -> (b h) () j", h=h)
+                    mask = mask[:, None, :].repeat(h, 1, 1)
+                    sim.masked_fill_(~mask, max_neg_value)
+
+                attn = sim.softmax(dim=-1)
+                # the only difference
+                out = editor(q, k, v, sim, attn, is_cross, place_in_unet, self.heads, scale=self.scale)
+
+                return to_out(out)
+
+            return forward
+
+        def register_editor(net, count, place_in_unet):
+            for name, subnet in net.named_children():
+                if net.__class__.__name__ == "Attention":  # spatial Transformer layer
+                    net.forward = ca_forward(net, place_in_unet)
+                    return count + 1
+                elif hasattr(net, "children"):
+                    count = register_editor(subnet, count, place_in_unet)
+            return count
+
+        cross_att_count = 0
+        for net_name, net in unet.named_children():
+            if "down" in net_name:
+                cross_att_count += register_editor(net, 0, "down")
+            elif "mid" in net_name:
+                cross_att_count += register_editor(net, 0, "mid")
+            elif "up" in net_name:
+                cross_att_count += register_editor(net, 0, "up")
+        editor.num_att_layers = cross_att_count
 
     @torch.no_grad()
     def __call__(
@@ -1546,7 +1653,8 @@ class StableDiffusionInpaintPipeline(
         if self.do_self_attention_redirection_guidance:
             self._AAS_end_step = int(strength * self._num_timesteps)
             layer_idx = list(range(self._AAS_start_layer, self._AAS_end_layer))
-            editor = AAS(
+            editor = AAS_Base(
+                None,
                 self._AAS_start_step,
                 self._AAS_end_step,
                 self._AAS_start_layer,
@@ -1619,10 +1727,10 @@ class StableDiffusionInpaintPipeline(
             if i <= 6: #9
                 rm_guidance_scale = 9 #9
             else:
-                rm_guidance_scale = self.rm_guidance_scale  """
+                rm_guidance_scale = self._rm_guidance_scale  """
 
             # noise_pred = noise_pred_wo + rm_guidance_scale * delta
-            noise_pred = noise_pred_wo + self.rm_guidance_scale * delta
+            noise_pred = noise_pred_wo + self._rm_guidance_scale * delta
 
             # compute the previous noisy sample x_t -> x_t-1
             # latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
@@ -1710,4 +1818,17 @@ class StableDiffusionInpaintPipeline(
                 self.latent2image(img[-1:], return_type="pt", generator=generator) for img in latents_list_denoise
             ]
             return image, pred_x0_list_denoise, latents_list_denoise
-        return image
+        
+        # Convert tensor to PIL images
+        if isinstance(image, torch.Tensor):
+            # image is in range [0, 1] from latent2image
+            image_np = image.cpu().permute(0, 2, 3, 1).numpy() * 255
+            image_np = image_np.astype(np.uint8)
+            image_list = [PIL.Image.fromarray(img) for img in image_np]
+        else:
+            image_list = image if isinstance(image, list) else [image]
+        
+        if not return_dict:
+            return (image_list,)
+        
+        return StableDiffusionPipelineOutput(images=image_list, nsfw_content_detected=False)
