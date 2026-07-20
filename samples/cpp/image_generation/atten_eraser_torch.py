@@ -60,7 +60,7 @@ MODEL_CONFIG = {
 
 def parse_args(argv=None) -> argparse.Namespace:
     """Parse and return command line arguments."""
-    parser = argparse.ArgumentParser(description="SDXL Attentive Eraser with optional OpenVINO conversion")
+    parser = argparse.ArgumentParser(description="Attentive Eraser with optional OpenVINO conversion")
     parser.add_argument(
         "--model_type", type=str, choices=["SD2", "SDXL"], default="SDXL", help="Model to use (default: SDXL)"
     )
