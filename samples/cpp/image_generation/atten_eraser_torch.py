@@ -20,7 +20,9 @@ device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cp
 
 MODEL_CONFIG = {
     "SD2": {
-        "model_name": "stabilityai/stable-diffusion-2-1-base",
+        # "model_name": "stabilityai/stable-diffusion-2-1-base",
+        # "model_name": "Manojb/stable-diffusion-2-1-base",
+        "model_name": "C:\\Users\\John\\Documents\\ov_genai_fork3\\stable-diffusion-2-1-base",
         "pipeline": StableDiffusionInpaintPipeline,
         "custom_pipeline": "./atten_eraser_pipeline/pipeline_inp.py",
         "height": 512,
@@ -259,20 +261,20 @@ def convert_unet_to_openvino(unet, export_dir="./sdxl_atten_eraser_ov/unet", hei
     return ov_model
 
 
-def preprocess_image(image_path, device):
+def preprocess_image(image_path, device, height=1024, width=1024):
     image = to_tensor((load_image(image_path)))
-    image = image.unsqueeze_(0).float() * 2 - 1  # [0,1] --> [-1,1]
+    image = image.unsqueeze_(0).float()  # [0,1] range (expected by diffusers)
     if image.shape[1] != 3:
         image = image.expand(-1, 3, -1, -1)
-    image = F.interpolate(image, (1024, 1024))
+    image = F.interpolate(image, (height, width))
     image = image.to(dtype).to(device)
     return image
 
 
-def preprocess_mask(mask_path, device):
+def preprocess_mask(mask_path, device, height=1024, width=1024):
     mask = to_tensor((load_image(mask_path, convert_method=lambda img: img.convert("L"))))
     mask = mask.unsqueeze_(0).float()  # 0 or 1
-    mask = F.interpolate(mask, (1024, 1024))
+    mask = F.interpolate(mask, (height, width))
     mask = gaussian_blur(mask, kernel_size=(77, 77))
     mask[mask < 0.1] = 0
     mask[mask >= 0.1] = 1
@@ -317,6 +319,7 @@ def main():
             variant="fp16",
             use_safetensors=True,
             torch_dtype=dtype,
+            trust_remote_code=True,
         )
         .to(device)
     )
@@ -332,8 +335,8 @@ def main():
         source_out = output_dir / "source_image.png"
         mask_out = output_dir / "mask.png"
         save_as_jpg(source_image_path, mask_path, source_out=source_out, mask_out=mask_out)
-    source_image = preprocess_image(source_image_path, device)
-    mask = preprocess_mask(mask_path, device)
+    source_image = preprocess_image(source_image_path, device, model_config["height"], model_config["width"])
+    mask = preprocess_mask(mask_path, device, model_config["height"], model_config["width"])
 
     # Create step callback if saving intermediates
     callback_on_step_end = None
@@ -346,8 +349,8 @@ def main():
         prompt=prompt,
         image=source_image,
         mask_image=mask,
-        height=1024,
-        width=1024,
+        height=model_config["height"],
+        width=model_config["width"],
         AAS=True,  # enable AAS
         strength=strength,  # inpainting strength
         rm_guidance_scale=model_config["rm_guidance_scale"],  # removal guidance scale
