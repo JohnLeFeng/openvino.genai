@@ -61,6 +61,10 @@ MODEL_CONFIG = {
     },
 }
 
+MODEL_CONFIG["SD15"] = MODEL_CONFIG["SD2"]  # SD1.5 uses the same config as SD2
+MODEL_CONFIG["SD15"]["model_name"] = "runwayml/stable-diffusion-v1-5"
+MODEL_CONFIG["SD15"]["export_dir"] = "./sd15_atten_eraser_ov/unet"  # Output directory for OpenVINO IR
+MODEL_CONFIG["SD15"]["output_dir"] = "./sd15_atten_eraser_results/torch"  # Output directory for generated images
 
 def parse_args(argv=None) -> argparse.Namespace:
     """Parse and return command line arguments."""
