@@ -70,7 +70,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     """Parse and return command line arguments."""
     parser = argparse.ArgumentParser(description="Attentive Eraser with optional OpenVINO conversion")
     parser.add_argument(
-        "--model_type", type=str, choices=["SD2", "SDXL"], default="SDXL", help="Model to use (default: SDXL)"
+        "--model_type", type=str, choices=["SD15", "SD2", "SDXL"], default="SDXL", help="Model to use (default: SDXL)"
     )
     parser.add_argument("--convert-unet", action="store_true", help="Convert AAS-modified UNet to OpenVINO IR")
     parser.add_argument(
