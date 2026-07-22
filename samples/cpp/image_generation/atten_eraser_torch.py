@@ -61,12 +61,16 @@ MODEL_CONFIG = {
     },
 }
 
+MODEL_CONFIG["SD15"] = dict(MODEL_CONFIG["SD2"])  # SD1.5 shares SD2's config (independent copy)
+MODEL_CONFIG["SD15"]["model_name"] = "runwayml/stable-diffusion-v1-5"
+MODEL_CONFIG["SD15"]["export_dir"] = "./sd15_atten_eraser_ov/unet"  # Output directory for OpenVINO IR
+MODEL_CONFIG["SD15"]["output_dir"] = "./sd15_atten_eraser_results/torch"  # Output directory for generated images
 
 def parse_args(argv=None) -> argparse.Namespace:
     """Parse and return command line arguments."""
     parser = argparse.ArgumentParser(description="Attentive Eraser with optional OpenVINO conversion")
     parser.add_argument(
-        "--model_type", type=str, choices=["SD2", "SDXL"], default="SDXL", help="Model to use (default: SDXL)"
+        "--model_type", type=str, choices=["SD15", "SD2", "SDXL"], default="SDXL", help="Model to use (default: SDXL)"
     )
     parser.add_argument("--convert-unet", action="store_true", help="Convert AAS-modified UNet to OpenVINO IR")
     parser.add_argument(
@@ -172,8 +176,20 @@ def _runtime_aas_masked_attention(
     return torch.cat([out_fg, out_bg], dim=0)
 
 
-def convert_unet_to_openvino(unet, export_dir="./sdxl_atten_eraser_ov/unet", height=1024, width=1024):
-    """Convert the AAS-modified SDXL UNet to OpenVINO IR (openvino_model.xml/.bin).
+def convert_unet_to_openvino(
+    unet, export_dir="./sdxl_atten_eraser_ov/unet", model_type="SDXL", height=1024, width=1024
+):
+    """Convert the AAS-modified UNet to OpenVINO IR (openvino_model.xml/.bin).
+
+    Supports both SDXL and SD1.5/SD2. The two families differ in two ways that
+    matter for tracing:
+
+    * SDXL's UNet expects ``added_cond_kwargs`` (a dict with ``text_embeds`` and
+      ``time_ids``); SD1.5/SD2 do not. For SDXL we flatten that dict into
+      explicit tensors so they become real graph inputs.
+    * The per-resolution AAS masks differ: SDXL (1024px) uses 16/32/64/128 while
+      SD1.5/SD2 (512px) uses 8/16/32/64. Both are recomputed from the ``mask``
+      input inside ``forward`` so the exported IR works for ANY mask.
 
     NOTE: AAS does not add weights - it monkey-patches each ``Attention.forward``
     with a stateful editor whose behavior depends on Python-level step/layer
@@ -183,15 +199,37 @@ def convert_unet_to_openvino(unet, export_dir="./sdxl_atten_eraser_ov/unet", hei
 
     The AAS ``mask``, ``cur_step``, and ``ss_steps`` values are exposed as real
     model inputs. The AAS layer range remains fixed at conversion time.
-
-    SDXL's UNet also expects ``added_cond_kwargs`` (a dict with ``text_embeds``
-    and ``time_ids``); we wrap it to flatten that dict into explicit tensors.
     """
     import openvino as ov
 
+    # The AAS editors look up per-resolution masks via a single dimension
+    # ``int(np.sqrt(q.shape[1]))``, which is only valid for square latents. The
+    # mask derivation below keys attributes off ``height`` alone for the same
+    # reason. Fail loudly on non-square requests instead of emitting a subtly
+    # wrong IR. (Full non-square support would require reworking the pipelines.)
+    if height != width:
+        raise ValueError(
+            f"convert_unet_to_openvino currently supports only square latents "
+            f"(height == width); got height={height}, width={width}."
+        )
+
+    is_sdxl = model_type == "SDXL"
     unet = unet.eval()
     p_dtype = next(unet.parameters()).dtype
     p_device = next(unet.parameters()).device
+
+    # Determine the added-conditioning requirement from the model itself rather
+    # than trusting the ``model_type`` string: SDXL's UNet has
+    # ``addition_embed_type == "text_time"`` and therefore needs the extra
+    # ``text_embeds``/``time_ids`` inputs; SD1.5/SD2 do not. Detecting it here
+    # means a wrong/omitted ``model_type`` can't silently produce a broken IR.
+    needs_added_cond = getattr(unet.config, "addition_embed_type", None) == "text_time"
+    if needs_added_cond != is_sdxl:
+        print(
+            f"Warning: model_type={model_type!r} but UNet addition_embed_type="
+            f"{getattr(unet.config, 'addition_embed_type', None)!r}; following the model."
+        )
+    is_sdxl = needs_added_cond
 
     # Put the AAS editor into an active step so the trace exercises the AAS path
     # (after generation it sits past its last step and would trace plain attention).
@@ -205,26 +243,37 @@ def convert_unet_to_openvino(unet, export_dir="./sdxl_atten_eraser_ov/unet", hei
     else:
         print("Warning: no AAS editor found on UNet; exporting the plain attention path.")
 
-    class UNetWrapper(torch.nn.Module):
+    def _set_editor_masks(editor, mask):
+        # Feed the AAS mask as a real graph INPUT instead of a baked constant.
+        # Recomputing the per-resolution masks from `mask` here keeps them tied
+        # to the input node, so the exported IR works for ANY mask, not just the
+        # one used during generation. (kernels mirror AAS_XL/AAS_Base.__init__)
+        #
+        # Kernel sizes use the constant height/width (not mask.shape) so that
+        # max_pool2d's kernel stays a compile-time constant for OpenVINO.
+        editor.mask = mask
+        # The AAS editor attends at four spatial resolutions equal to the latent
+        # size and its halvings: latent, latent/2, latent/4, latent/8. That is
+        # 8/16/32/64 for SD1.5/SD2 (512px) and 16/32/64/128 for SDXL (1024px).
+        # Deriving them from height/width makes this correct for either family
+        # without a model-type branch. Kernel sizes stay compile-time constant
+        # (from height/width, not mask.shape) so max_pool2d traces cleanly.
+        for res in (height // 8, height // 16, height // 32, height // 64):
+            setattr(
+                editor,
+                f"mask_{res}",
+                F.max_pool2d(mask, (height // res, width // res)).round().squeeze().squeeze(),
+            )
+
+    class UNetWrapperSDXL(torch.nn.Module):
         def __init__(self, unet, editor):
             super().__init__()
             self.unet = unet
             self.editor = editor
 
         def forward(self, sample, timestep, encoder_hidden_states, text_embeds, time_ids, mask, cur_step, ss_steps):
-            # Feed the AAS mask as a real graph INPUT instead of a baked constant.
-            # Recomputing the per-resolution masks from `mask` here keeps them tied
-            # to the input node, so the exported IR works for ANY mask, not just the
-            # one used during generation. (kernels mirror AAS_XL.__init__)
-            #
-            # Kernel sizes use the constant height/width (not mask.shape) so that
-            # max_pool2d's kernel stays a compile-time constant for OpenVINO.
             if self.editor is not None:
-                self.editor.mask = mask
-                self.editor.mask_16 = F.max_pool2d(mask, (height // 16, width // 16)).round().squeeze().squeeze()
-                self.editor.mask_32 = F.max_pool2d(mask, (height // 32, width // 32)).round().squeeze().squeeze()
-                self.editor.mask_64 = F.max_pool2d(mask, (height // 64, width // 64)).round().squeeze().squeeze()
-                self.editor.mask_128 = F.max_pool2d(mask, (height // 128, width // 128)).round().squeeze().squeeze()
+                _set_editor_masks(self.editor, mask)
                 self.editor.runtime_cur_step = cur_step
                 self.editor.runtime_ss_steps = ss_steps
             return self.unet(
@@ -235,23 +284,42 @@ def convert_unet_to_openvino(unet, export_dir="./sdxl_atten_eraser_ov/unet", hei
                 return_dict=False,
             )[0]
 
+    class UNetWrapperSD(torch.nn.Module):
+        def __init__(self, unet, editor):
+            super().__init__()
+            self.unet = unet
+            self.editor = editor
+
+        def forward(self, sample, timestep, encoder_hidden_states, mask, cur_step, ss_steps):
+            if self.editor is not None:
+                _set_editor_masks(self.editor, mask)
+                self.editor.runtime_cur_step = cur_step
+                self.editor.runtime_ss_steps = ss_steps
+            return self.unet(
+                sample,
+                timestep,
+                encoder_hidden_states=encoder_hidden_states,
+                return_dict=False,
+            )[0]
+
     latent_h, latent_w = height // 8, width // 8
     batch = 2  # classifier-free guidance doubles the batch
-    cross_attention_dim = unet.config.cross_attention_dim  # 2048 for SDXL base
+    cross_attention_dim = unet.config.cross_attention_dim  # 2048 SDXL, 1024 SD2, 768 SD1.5
 
     example_input = {
         "sample": torch.randn(batch, unet.config.in_channels, latent_h, latent_w, dtype=p_dtype, device=p_device),
         "timestep": torch.tensor(1, dtype=torch.int64, device=p_device),
         "encoder_hidden_states": torch.randn(batch, 77, cross_attention_dim, dtype=p_dtype, device=p_device),
-        "text_embeds": torch.randn(batch, 1280, dtype=p_dtype, device=p_device),
-        "time_ids": torch.randn(batch, 6, dtype=p_dtype, device=p_device),
-        # AAS mask input (full resolution, values in {0, 1}); downsampled inside forward.
-        "mask": torch.randint(0, 2, (1, 1, height, width)).to(dtype=p_dtype, device=p_device),
-        "cur_step": torch.tensor(0, dtype=torch.int64, device=p_device),
-        "ss_steps": torch.tensor(9, dtype=torch.int64, device=p_device),
     }
+    if is_sdxl:
+        example_input["text_embeds"] = torch.randn(batch, 1280, dtype=p_dtype, device=p_device)
+        example_input["time_ids"] = torch.randn(batch, 6, dtype=p_dtype, device=p_device)
+    # AAS mask input (full resolution, values in {0, 1}); downsampled inside forward.
+    example_input["mask"] = torch.randint(0, 2, (1, 1, height, width)).to(dtype=p_dtype, device=p_device)
+    example_input["cur_step"] = torch.tensor(0, dtype=torch.int64, device=p_device)
+    example_input["ss_steps"] = torch.tensor(9, dtype=torch.int64, device=p_device)
 
-    wrapper = UNetWrapper(unet, editor)
+    wrapper = (UNetWrapperSDXL if is_sdxl else UNetWrapperSD)(unet, editor)
     with torch.no_grad():
         ov_model = ov.convert_model(wrapper, example_input=example_input)
 
@@ -378,7 +446,11 @@ def main():
     # Convert the AAS-modified UNet to OpenVINO IR after generation (if --convert-unet flag is set).
     if convert_unet:
         convert_unet_to_openvino(
-            pipeline.unet, export_dir=export_dir, height=model_config["height"], width=model_config["width"]
+            pipeline.unet,
+            export_dir=export_dir,
+            height=model_config["height"],
+            width=model_config["width"],
+            model_type=args.model_type,
         )
     else:
         print("Skipping UNet conversion (use --convert-unet to enable)")
