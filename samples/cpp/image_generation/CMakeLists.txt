@@ -157,7 +157,7 @@ install(TARGETS image2image
         COMPONENT samples_bin
         EXCLUDE_FROM_ALL)
 
-# create SDXL Attentive Eraser sample executable
+# create Attentive Eraser sample executable
 
 add_executable(attentive_eraser attentive_eraser_pipeline.cpp load_image.cpp imwrite.cpp)
 

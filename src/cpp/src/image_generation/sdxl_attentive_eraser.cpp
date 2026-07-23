@@ -258,7 +258,7 @@ public:
             actual_inputs.insert(input.get_any_name());
         }
         OPENVINO_ASSERT(actual_inputs == expected_inputs,
-                        "Attentive Eraser UNet inputs do not match the required six-input contract");
+                        "SDXL Attentive Eraser UNet inputs do not match the required eight-input contract");
 
         model->reshape({{"sample", {2, 4, 128, 128}},
                 {"timestep", {}},
