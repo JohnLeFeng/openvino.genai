@@ -27,6 +27,7 @@ MODEL_CONFIG = {
         "custom_pipeline": "./atten_eraser_pipeline/pipeline_inp.py",
         "height": 512,
         "width": 512,
+        "mask_blur_kernel": 7,
         "source_image_path": "https://raw.githubusercontent.com/Alibaba-VELLDEPTH/AttentiveEraser/refs/heads/master/examples/img/an.png",
         "mask_path": "https://raw.githubusercontent.com/Alibaba-VELLDEPTH/AttentiveEraser/refs/heads/master/examples/mask/an_mask.png",
         "AAS_start_step": 0,  # AAS start step
@@ -48,6 +49,7 @@ MODEL_CONFIG = {
         "custom_pipeline": "pipeline_stable_diffusion_xl_attentive_eraser",
         "height": 1024,
         "width": 1024,
+        "mask_blur_kernel": 77,
         "source_image_path": "https://raw.githubusercontent.com/Anonym0u3/Images/refs/heads/main/an1024.png",
         "mask_path": "https://raw.githubusercontent.com/Anonym0u3/Images/refs/heads/main/an1024_mask.png",
         "AAS_start_step": 0,  # AAS start step
@@ -339,11 +341,11 @@ def preprocess_image(image_path, device, height=1024, width=1024):
     return image
 
 
-def preprocess_mask(mask_path, device, height=1024, width=1024):
+def preprocess_mask(mask_path, device, height=1024, width=1024, kernel_size=77):
     mask = to_tensor((load_image(mask_path, convert_method=lambda img: img.convert("L"))))
     mask = mask.unsqueeze_(0).float()  # 0 or 1
     mask = F.interpolate(mask, (height, width))
-    mask = gaussian_blur(mask, kernel_size=(77, 77))
+    mask = gaussian_blur(mask, kernel_size=(kernel_size, kernel_size))
     mask[mask < 0.1] = 0
     mask[mask >= 0.1] = 1
     mask = mask.to(dtype).to(device)
@@ -404,7 +406,13 @@ def main():
         mask_out = output_dir / "mask.png"
         save_as_jpg(source_image_path, mask_path, source_out=source_out, mask_out=mask_out)
     source_image = preprocess_image(source_image_path, device, model_config["height"], model_config["width"])
-    mask = preprocess_mask(mask_path, device, model_config["height"], model_config["width"])
+    mask = preprocess_mask(
+        mask_path,
+        device,
+        model_config["height"],
+        model_config["width"],
+        model_config["mask_blur_kernel"],
+    )
 
     # Create step callback if saving intermediates
     callback_on_step_end = None
