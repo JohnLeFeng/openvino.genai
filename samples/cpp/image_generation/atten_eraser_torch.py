@@ -55,6 +55,7 @@ MODEL_CONFIG = {
         "AAS_start_step": 0,  # AAS start step
         "AAS_start_layer": 34,  # AAS start layer
         "AAS_end_layer": 70,  # AAS end layer
+        # "AAS_end_layer": 90,  # AAS end layer
         "ss_steps": 9,  # similarity suppression steps
         "ss_scale": 0.3,  # similarity suppression scale
         "rm_guidance_scale": 9.0,  # removal guidance scale
@@ -84,6 +85,12 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--save-intermediate", action="store_true", help="Save intermediate denoising steps")
     parser.add_argument(
         "--intermediate-steps", type=int, default=1, help="Save intermediate result every N steps (default: 1)"
+    )
+    parser.add_argument(
+        "--ss-steps", type=int, default=None, help="Override similarity suppression steps (default: model config value)"
+    )
+    parser.add_argument(
+        "--ss-scale", type=float, default=None, help="Override similarity suppression scale (default: model config value)"
     )
     return parser.parse_args(argv)
 
@@ -368,7 +375,11 @@ def main():
     model_config = MODEL_CONFIG[args.model_type]
     export_dir = Path(model_config["export_dir"])
     output_dir = Path(model_config["output_dir"])
-    intermediate_dir = output_dir / "intermediate_results"
+    if args.ss_steps is not None:
+        model_config["ss_steps"] = args.ss_steps
+    if args.ss_scale is not None:
+        model_config["ss_scale"] = args.ss_scale
+    intermediate_dir = output_dir / f"intermediate_results_ss_steps_{model_config['ss_steps']}_ss_scale_{model_config['ss_scale']}"
     export_model_only = args.export_model_only
     convert_unet = args.convert_unet or export_model_only
     save_image = args.save_image and not export_model_only
@@ -428,14 +439,16 @@ def main():
         height=model_config["height"],
         width=model_config["width"],
         AAS=True,  # enable AAS
-        strength=strength,  # inpainting strength
+        # strength=strength,  # inpainting strength
+        strength=0.9,  # inpainting strength
         rm_guidance_scale=model_config["rm_guidance_scale"],  # removal guidance scale
         ss_steps=model_config["ss_steps"],  # similarity suppression steps
         ss_scale=model_config["ss_scale"],  # similarity suppression scale
         AAS_start_step=model_config["AAS_start_step"],  # AAS start step
         AAS_start_layer=model_config["AAS_start_layer"],  # AAS start layer
         AAS_end_layer=model_config["AAS_end_layer"],  # AAS end layer
-        num_inference_steps=num_inference_steps,  # AAS_end_step = int(strength*num_inference_steps)
+        # num_inference_steps=num_inference_steps,  # AAS_end_step = int(strength*num_inference_steps)
+        num_inference_steps=10,  # AAS_end_step = int(strength*num_inference_steps)
         generator=generator,
         guidance_scale=1,
         callback_on_step_end=callback_on_step_end,
@@ -444,7 +457,7 @@ def main():
 
     if not export_model_only:
         output_dir.mkdir(parents=True, exist_ok=True)
-        output_image_path = output_dir / "result.png"
+        output_image_path = output_dir / f"result_ss_steps_{model_config['ss_steps']}_ss_scale_{model_config['ss_scale']}.png"
         image.save(output_image_path)
         print(f"Object removal completed. Image saved to {output_image_path}")
 
