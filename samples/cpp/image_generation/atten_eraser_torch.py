@@ -55,7 +55,6 @@ MODEL_CONFIG = {
         "AAS_start_step": 0,  # AAS start step
         "AAS_start_layer": 34,  # AAS start layer
         "AAS_end_layer": 70,  # AAS end layer
-        # "AAS_end_layer": 90,  # AAS end layer
         "ss_steps": 9,  # similarity suppression steps
         "ss_scale": 0.3,  # similarity suppression scale
         "rm_guidance_scale": 9.0,  # removal guidance scale
@@ -91,6 +90,12 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--ss-scale", type=float, default=None, help="Override similarity suppression scale (default: model config value)"
+    )
+    parser.add_argument(
+        "--strength", type=float, default=None, help="Override inpainting strength (default: 0.9)"
+    )
+    parser.add_argument(
+        "--num-inference-steps", type=int, default=None, help="Override number of inference steps (default: 10)"
     )
     return parser.parse_args(argv)
 
@@ -375,18 +380,18 @@ def main():
     model_config = MODEL_CONFIG[args.model_type]
     export_dir = Path(model_config["export_dir"])
     output_dir = Path(model_config["output_dir"])
+    export_model_only = args.export_model_only
     if args.ss_steps is not None:
         model_config["ss_steps"] = args.ss_steps
     if args.ss_scale is not None:
         model_config["ss_scale"] = args.ss_scale
-    intermediate_dir = output_dir / f"intermediate_results_ss_steps_{model_config['ss_steps']}_ss_scale_{model_config['ss_scale']}"
-    export_model_only = args.export_model_only
+    num_inference_steps = 1 if export_model_only else (args.num_inference_steps if args.num_inference_steps is not None else 10)
+    strength = 1.0 if export_model_only else (args.strength if args.strength is not None else 0.9)
+    intermediate_dir = output_dir / f"intermediate_results_ss_steps_{model_config['ss_steps']}_ss_scale_{model_config['ss_scale']}_strength_{strength}_steps_{num_inference_steps}"
     convert_unet = args.convert_unet or export_model_only
     save_image = args.save_image and not export_model_only
     save_intermediate = args.save_intermediate and not export_model_only
     intermediate_steps = args.intermediate_steps
-    num_inference_steps = 1 if export_model_only else 50
-    strength = 1.0 if export_model_only else 0.8
 
     scheduler = DDIMScheduler(
         beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", clip_sample=False, set_alpha_to_one=False
@@ -439,16 +444,14 @@ def main():
         height=model_config["height"],
         width=model_config["width"],
         AAS=True,  # enable AAS
-        # strength=strength,  # inpainting strength
-        strength=0.9,  # inpainting strength
+        strength=strength,  # inpainting strength
         rm_guidance_scale=model_config["rm_guidance_scale"],  # removal guidance scale
         ss_steps=model_config["ss_steps"],  # similarity suppression steps
         ss_scale=model_config["ss_scale"],  # similarity suppression scale
         AAS_start_step=model_config["AAS_start_step"],  # AAS start step
         AAS_start_layer=model_config["AAS_start_layer"],  # AAS start layer
         AAS_end_layer=model_config["AAS_end_layer"],  # AAS end layer
-        # num_inference_steps=num_inference_steps,  # AAS_end_step = int(strength*num_inference_steps)
-        num_inference_steps=10,  # AAS_end_step = int(strength*num_inference_steps)
+        num_inference_steps=num_inference_steps,  # AAS_end_step = int(strength*num_inference_steps)
         generator=generator,
         guidance_scale=1,
         callback_on_step_end=callback_on_step_end,
@@ -457,7 +460,7 @@ def main():
 
     if not export_model_only:
         output_dir.mkdir(parents=True, exist_ok=True)
-        output_image_path = output_dir / f"result_ss_steps_{model_config['ss_steps']}_ss_scale_{model_config['ss_scale']}.png"
+        output_image_path = output_dir / f"result_ss_steps_{model_config['ss_steps']}_ss_scale_{model_config['ss_scale']}_strength_{strength}_steps_{num_inference_steps}.png"
         image.save(output_image_path)
         print(f"Object removal completed. Image saved to {output_image_path}")
 
