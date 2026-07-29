@@ -31,6 +31,13 @@ class DiffusionPipeline;
 class Text2ImagePipeline;
 class Image2ImagePipeline;
 
+enum class InpaintingMode {
+    STANDARD,
+    ATTENTIVE_ERASER,
+};
+
+static constexpr ov::Property<InpaintingMode> inpainting_mode{"inpainting_mode"};
+
 //
 // Inpainting pipeline
 //
@@ -110,6 +117,9 @@ public:
 
     // ability to override scheduler
     void set_scheduler(std::shared_ptr<Scheduler> scheduler);
+
+    // enable/disable attentive eraser mode for inpainting
+    void set_attentive_eraser_mode(bool enable);
 
     // with static shapes performance is better
     void reshape(const int num_images_per_prompt, const int height, const int width, const float guidance_scale);

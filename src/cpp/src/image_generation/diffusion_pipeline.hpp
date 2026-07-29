@@ -13,6 +13,7 @@
 #include "image_generation/image_processor.hpp"
 
 #include "openvino/genai/image_generation/generation_config.hpp"
+#include "openvino/genai/image_generation/image_generation_perf_metrics.hpp"
 #include "openvino/genai/image_generation/autoencoder_kl.hpp"
 
 #include "lora/helper.hpp"
@@ -98,6 +99,11 @@ public:
         auto casted = std::dynamic_pointer_cast<IScheduler>(scheduler);
         OPENVINO_ASSERT(casted != nullptr, "Passed incorrect scheduler type");
         m_scheduler = casted;
+    }
+
+    virtual void set_attentive_eraser_mode(bool enable) {
+        // Default: no-op for pipelines that don't support attentive eraser mode
+        // Subclasses override if they support it
     }
 
     virtual void reshape(const int num_images_per_prompt, const int height, const int width, const float guidance_scale) = 0;

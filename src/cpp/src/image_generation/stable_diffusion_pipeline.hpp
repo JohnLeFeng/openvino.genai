@@ -14,6 +14,7 @@
 #include "openvino/genai/image_generation/clip_text_model.hpp"
 #include "openvino/genai/image_generation/clip_text_model_with_projection.hpp"
 #include "openvino/genai/image_generation/unet2d_condition_model.hpp"
+#include "openvino/genai/image_generation/sd_attentive_eraser.hpp"
 
 #include "openvino/runtime/core.hpp"
 
@@ -23,6 +24,29 @@
 
 namespace ov {
 namespace genai {
+
+namespace {
+
+template <typename Config>
+Config translate_sd_config(const ImageGenerationConfig& config, const ov::AnyMap& properties) {
+    OPENVINO_ASSERT(config.attentive_eraser.has_value(),
+                    "ImageGenerationConfig.attentive_eraser must be set in attentive eraser mode");
+    Config translated;
+    translated.rm_guidance_scale = config.attentive_eraser->rm_guidance_scale;
+    translated.ss_steps = config.attentive_eraser->ss_steps;
+    translated.strength = config.strength;
+    translated.num_inference_steps = config.num_inference_steps;
+    translated.rng_seed = config.rng_seed;
+    translated.generator = config.generator;
+
+    const auto callback_iter = properties.find(ov::genai::callback.name());
+    if (callback_iter != properties.end()) {
+        translated.callback = callback_iter->second.as<std::function<bool(size_t, size_t, ov::Tensor&)>>();
+    }
+    return translated;
+}
+
+}  // namespace
 
 class StableDiffusionPipeline : public DiffusionPipeline {
 public:
@@ -67,6 +91,24 @@ public:
         } else {
             OPENVINO_THROW("Unsupported '", vae, "' VAE decoder type");
         }
+
+        // Detect model hidden size (SD1.5=768, SD2=1024) from UNet encoder_hidden_states input
+        auto unet_model = utils::singleton_core().read_model(root_dir / "unet" / "openvino_model.xml");
+        const auto hidden_states_shape = unet_model->input("encoder_hidden_states").get_partial_shape();
+        OPENVINO_ASSERT(hidden_states_shape.rank().is_static() && hidden_states_shape.rank().get_length() == 3,
+                        "SD Attentive Eraser UNet input 'encoder_hidden_states' must have rank 3");
+        if (hidden_states_shape[2].is_static()) {
+            m_attentive_eraser_hidden_size = hidden_states_shape[2].get_length();
+        } else {
+            auto text_encoder_model = utils::singleton_core().read_model(root_dir / "text_encoder" / "openvino_model.xml");
+            const auto text_hidden_shape = text_encoder_model->output("last_hidden_state").get_partial_shape();
+            OPENVINO_ASSERT(text_hidden_shape.rank().is_static() && text_hidden_shape.rank().get_length() == 3 &&
+                                text_hidden_shape[2].is_static(),
+                            "SD text encoder output 'last_hidden_state' must expose a static hidden width");
+            m_attentive_eraser_hidden_size = text_hidden_shape[2].get_length();
+        }
+        OPENVINO_ASSERT(m_attentive_eraser_hidden_size == 768 || m_attentive_eraser_hidden_size == 1024,
+                        "SD conditioning must have hidden width 768 or 1024, got ", m_attentive_eraser_hidden_size);
 
         // initialize generation config
         initialize_generation_config(data["_class_name"].get<std::string>());
@@ -113,6 +155,24 @@ public:
             OPENVINO_THROW("Unsupported '", vae, "' VAE decoder type");
         }
 
+        // Detect model hidden size (SD1.5=768, SD2=1024) from UNet encoder_hidden_states input
+        auto unet_model = utils::singleton_core().read_model(root_dir / "unet" / "openvino_model.xml");
+        const auto hidden_states_shape = unet_model->input("encoder_hidden_states").get_partial_shape();
+        OPENVINO_ASSERT(hidden_states_shape.rank().is_static() && hidden_states_shape.rank().get_length() == 3,
+                        "SD Attentive Eraser UNet input 'encoder_hidden_states' must have rank 3");
+        if (hidden_states_shape[2].is_static()) {
+            m_attentive_eraser_hidden_size = hidden_states_shape[2].get_length();
+        } else {
+            auto text_encoder_model = utils::singleton_core().read_model(root_dir / "text_encoder" / "openvino_model.xml");
+            const auto text_hidden_shape = text_encoder_model->output("last_hidden_state").get_partial_shape();
+            OPENVINO_ASSERT(text_hidden_shape.rank().is_static() && text_hidden_shape.rank().get_length() == 3 &&
+                                text_hidden_shape[2].is_static(),
+                            "SD text encoder output 'last_hidden_state' must expose a static hidden width");
+            m_attentive_eraser_hidden_size = text_hidden_shape[2].get_length();
+        }
+        OPENVINO_ASSERT(m_attentive_eraser_hidden_size == 768 || m_attentive_eraser_hidden_size == 1024,
+                        "SD conditioning must have hidden width 768 or 1024, got ", m_attentive_eraser_hidden_size);
+
         // initialize generation config
         initialize_generation_config(data["_class_name"].get<std::string>());
 
@@ -135,17 +195,22 @@ public:
     }
 
     StableDiffusionPipeline(PipelineType pipeline_type, const StableDiffusionPipeline& pipe) :
-        StableDiffusionPipeline(pipe) {
-        OPENVINO_ASSERT(!pipe.is_inpainting_model(), "Cannot create ",
-            pipeline_type == PipelineType::TEXT_2_IMAGE ? "'Text2ImagePipeline'" : "'Image2ImagePipeline'", " from InpaintingPipeline with inpainting model");
-
+        DiffusionPipeline(pipeline_type),
+        m_use_attentive_eraser(false),
+        m_sd15(nullptr),
+        m_sd2(nullptr),
+        m_attentive_eraser_hidden_size(pipe.m_attentive_eraser_hidden_size) {
+        // Copy construction: initialize attentive eraser members as nullptr (lazy init)
         m_root_dir = pipe.m_root_dir;
-
         m_clip_text_encoder = std::make_shared<CLIPTextModel>(*pipe.m_clip_text_encoder);
         m_unet = std::make_shared<UNet2DConditionModel>(*pipe.m_unet);
         m_vae = std::make_shared<AutoencoderKL>(*pipe.m_vae);
-
         m_pipeline_type = pipeline_type;
+        m_generation_config = pipe.m_generation_config;
+        m_scheduler = pipe.m_scheduler;
+
+        OPENVINO_ASSERT(!pipe.is_inpainting_model(), "Cannot create ",
+            pipeline_type == PipelineType::TEXT_2_IMAGE ? "'Text2ImagePipeline'" : "'Image2ImagePipeline'", " from InpaintingPipeline with inpainting model");
 
         const bool is_lcm = m_unet->get_config().time_cond_proj_dim > 0;
         const char * const pipeline_name = is_lcm ? "LatentConsistencyModelPipeline" : "StableDiffusionPipeline";
@@ -161,6 +226,20 @@ public:
         m_vae->reshape(num_images_per_prompt, height, width);
     }
 
+    void set_attentive_eraser_mode(bool enable) override {
+        m_use_attentive_eraser = enable;
+        if (enable) {
+            // Initialize attentive eraser engines if not already done
+            if (!m_root_dir.empty() && !m_sd15 && !m_sd2) {
+                if (m_attentive_eraser_hidden_size == 768) {
+                    m_sd15 = std::make_unique<SD15AttentiveEraser>(m_root_dir);
+                } else {
+                    m_sd2 = std::make_unique<SD2AttentiveEraser>(m_root_dir);
+                }
+            }
+        }
+    }
+
     void compile(const std::string& text_encode_device,
         const std::string& denoise_device,
         const std::string& vae_device,
@@ -171,6 +250,15 @@ public:
         m_clip_text_encoder->compile(text_encode_device, *updated_properties);
         m_unet->compile(denoise_device, *updated_properties);
         m_vae->compile(vae_device, *updated_properties);
+
+        // Compile attentive eraser engines if enabled
+        if (m_use_attentive_eraser) {
+            if (m_sd15) {
+                m_sd15->compile(text_encode_device, *updated_properties);
+            } else if (m_sd2) {
+                m_sd2->compile(text_encode_device, *updated_properties);
+            }
+        }
     }
 
     std::shared_ptr<DiffusionPipeline> clone() override {
@@ -301,6 +389,43 @@ public:
         m_perf_metrics.clean_up();
         ImageGenerationConfig generation_config = m_generation_config;
         generation_config.update_generation_config(properties);
+
+        // Handle attentive eraser mode
+        if (m_use_attentive_eraser && m_pipeline_type == PipelineType::INPAINTING) {
+            OPENVINO_ASSERT(positive_prompt.empty(), "Attentive eraser mode requires an empty positive prompt");
+            OPENVINO_ASSERT(generation_config.attentive_eraser.has_value(),
+                            "ImageGenerationConfig.attentive_eraser must be set in attentive eraser mode");
+            OPENVINO_ASSERT(generation_config.guidance_scale == 1.0f, "Attentive eraser mode requires guidance_scale == 1.0");
+            OPENVINO_ASSERT(generation_config.negative_prompt == std::nullopt &&
+                                generation_config.negative_prompt_2 == std::nullopt &&
+                                generation_config.negative_prompt_3 == std::nullopt,
+                            "Attentive eraser mode does not support negative prompts");
+            OPENVINO_ASSERT(generation_config.prompt_2 == std::nullopt && generation_config.prompt_3 == std::nullopt,
+                            "Attentive eraser mode does not support additional prompts");
+            OPENVINO_ASSERT(generation_config.strength > 0.0f && generation_config.strength <= 1.0f,
+                            "Attentive eraser strength must be in (0, 1]");
+            OPENVINO_ASSERT(generation_config.num_inference_steps > 0, "Attentive eraser num_inference_steps must be positive");
+            OPENVINO_ASSERT(generation_config.num_images_per_prompt == 1,
+                            "Attentive eraser mode supports num_images_per_prompt == 1 only");
+            OPENVINO_ASSERT(!generation_config.adapters.has_value(), "Attentive eraser mode does not support LoRA adapters");
+
+            if (m_sd15) {
+                m_perf_metrics.generate_duration =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - gen_start)
+                        .count();
+                return m_sd15->generate(std::move(initial_image),
+                                        std::move(mask_image),
+                                        translate_sd_config<SDAttentiveEraserConfig>(generation_config, properties));
+            }
+            if (m_sd2) {
+                m_perf_metrics.generate_duration =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - gen_start)
+                        .count();
+                return m_sd2->generate(std::move(initial_image),
+                                       std::move(mask_image),
+                                       translate_sd_config<SDAttentiveEraserConfig>(generation_config, properties));
+            }
+        }
 
         // Stable Diffusion pipeline
         // see https://huggingface.co/docs/diffusers/using-diffusers/write_own_pipeline#deconstruct-the-stable-diffusion-pipeline
@@ -522,6 +647,12 @@ protected:
 
     std::shared_ptr<CLIPTextModel> m_clip_text_encoder = nullptr;
     std::shared_ptr<UNet2DConditionModel> m_unet = nullptr;
+
+    // Attentive eraser support
+    bool m_use_attentive_eraser = false;
+    size_t m_attentive_eraser_hidden_size = 0;
+    std::unique_ptr<SD15AttentiveEraser> m_sd15;
+    std::unique_ptr<SD2AttentiveEraser> m_sd2;
 };
 
 }  // namespace genai
