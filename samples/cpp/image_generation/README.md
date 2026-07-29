@@ -13,6 +13,7 @@ There are several sample files:
  - [`image2image.cpp`](./image2image.cpp) demonstrates basic usage of the image to image pipeline
  - [`image2image_concurrency.cpp`](./image2image_concurrency.cpp) demonstrates concurrent usage of the image to image pipeline to create multiple images with different prompts
  - [`inpainting.cpp`](./inpainting.cpp) demonstrates basic usage of the inpainting pipeline
+ - [`attentive_eraser_pipeline.cpp`](./attentive_eraser_pipeline.cpp) demonstrates object removal with Attentive Eraser mode through the inpainting pipeline
  - [`benchmark_image_gen.cpp`](./benchmark_image_gen.cpp) demonstrates how to benchmark the text to image / image to image / inpainting pipeline
  - [`stable_diffusion_export_import.cpp`](./stable_diffusion_export_import.cpp) demonstrates how to export and import compiled models from/to the text to image pipeline. Only the Stable Diffusion XL model is supported.
 
@@ -247,6 +248,30 @@ The resulting image is:
    ![](./inpainting.bmp)
 
 Note, that LoRA, heterogeneous execution and other features of `Text2ImagePipeline` are applicable for `InpaintingPipeline`.
+
+## Run Attentive Eraser through the inpainting pipeline
+
+The `attentive_eraser_pipeline.cpp` sample uses the same `InpaintingPipeline` interface with `InpaintingMode::ATTENTIVE_ERASER`. The model family is detected from the exported model, so the same executable supports SD1.5, SD2, and SDXL attentive models.
+
+Build the sample:
+
+```sh
+cmake --build build --config Release --target attentive_eraser_pipeline
+```
+
+Run it with an attentive model, source image, and mask:
+
+```sh
+./attentive_eraser_pipeline <MODEL_DIR> <IMAGE> <MASK_IMAGE> [DEVICE] [SEED]
+```
+
+For example:
+
+```sh
+./attentive_eraser_pipeline ./sd15_atten_eraser_ov source_image.png mask.png GPU 123
+```
+
+The positive prompt is intentionally empty for object removal. The generated image is saved as `removed_image.bmp`.
 
 ## Benchmarking sample for image generation pipelines
 
