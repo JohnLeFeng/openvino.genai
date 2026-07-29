@@ -5,6 +5,7 @@
 
 #include "image_generation/stable_diffusion_pipeline.hpp"
 #include "openvino/genai/image_generation/clip_text_model_with_projection.hpp"
+#include "openvino/genai/image_generation/sdxl_attentive_eraser.hpp"
 
 namespace ov {
 namespace genai {
@@ -173,7 +174,9 @@ public:
     }
 
     StableDiffusionXLPipeline(PipelineType pipeline_type, const StableDiffusionXLPipeline& pipe) :
-        StableDiffusionXLPipeline(pipe) {
+        StableDiffusionPipeline(pipeline_type, pipe),
+        m_sdxl_attentive(nullptr) {
+        // Copy construction: initialize SDXL attentive eraser as nullptr (lazy init)
         OPENVINO_ASSERT(!pipe.is_inpainting_model(), "Cannot create ",
             pipeline_type == PipelineType::TEXT_2_IMAGE ? "'Text2ImagePipeline'" : "'Image2ImagePipeline'", " from InpaintingPipeline with inpainting model");
 
@@ -185,6 +188,7 @@ public:
         m_vae = std::make_shared<AutoencoderKL>(*pipe.m_vae);
 
         m_pipeline_type = pipeline_type;
+        m_force_zeros_for_empty_prompt = pipe.m_force_zeros_for_empty_prompt;
         initialize_generation_config("StableDiffusionXLPipeline");
     }
 
@@ -217,6 +221,55 @@ public:
         }
         m_vae->compile(vae_device, *updated_properties);
         updated_properties.fork().erase("NPU_COMPILATION_MODE_PARAMS");
+
+        // Compile SDXL attentive eraser if enabled
+        if (m_use_attentive_eraser && m_sdxl_attentive) {
+            m_sdxl_attentive->compile(text_encode_device, *updated_properties);
+        }
+    }
+
+    void set_attentive_eraser_mode(bool enable) override {
+        m_use_attentive_eraser = enable;
+        if (enable) {
+            // Initialize SDXL attentive eraser if not already done
+            if (!m_root_dir.empty() && !m_sdxl_attentive) {
+                m_sdxl_attentive = std::make_unique<SDXLAttentiveEraser>(m_root_dir);
+            }
+        }
+    }
+
+    ov::Tensor generate(const std::string& positive_prompt,
+                        ov::Tensor initial_image,
+                        ov::Tensor mask_image,
+                        const ov::AnyMap& properties) override {
+        const auto gen_start = std::chrono::steady_clock::now();
+        ImageGenerationConfig generation_config = m_generation_config;
+        generation_config.update_generation_config(properties);
+
+        // Handle SDXL attentive eraser mode
+        if (m_use_attentive_eraser && m_pipeline_type == PipelineType::INPAINTING && m_sdxl_attentive) {
+            OPENVINO_ASSERT(positive_prompt.empty(), "Attentive eraser mode requires an empty positive prompt");
+            OPENVINO_ASSERT(generation_config.attentive_eraser.has_value(),
+                            "ImageGenerationConfig.attentive_eraser must be set in attentive eraser mode");
+            OPENVINO_ASSERT(generation_config.guidance_scale == 1.0f, "Attentive eraser mode requires guidance_scale == 1.0");
+            OPENVINO_ASSERT(generation_config.negative_prompt == std::nullopt &&
+                                generation_config.negative_prompt_2 == std::nullopt &&
+                                generation_config.negative_prompt_3 == std::nullopt,
+                            "Attentive eraser mode does not support negative prompts");
+            OPENVINO_ASSERT(generation_config.num_images_per_prompt == 1,
+                            "Attentive eraser mode supports num_images_per_prompt == 1 only");
+            OPENVINO_ASSERT(!generation_config.adapters.has_value(), "Attentive eraser mode does not support LoRA adapters");
+
+            m_perf_metrics.generate_duration =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - gen_start)
+                    .count();
+            return m_sdxl_attentive->generate(std::move(initial_image),
+                                              std::move(mask_image),
+                                              translate_sd_config<SDXLAttentiveEraserConfig>(generation_config, properties));
+        }
+
+        // Otherwise use standard SDXL pipeline
+        return StableDiffusionPipeline::generate(positive_prompt, initial_image, mask_image, properties);
     }
 
     std::shared_ptr<DiffusionPipeline> clone() override {
@@ -483,6 +536,9 @@ private:
 
     bool m_force_zeros_for_empty_prompt = true;
     std::shared_ptr<CLIPTextModelWithProjection> m_clip_text_encoder_with_projection = nullptr;
+
+    // Attentive eraser support (SDXL)
+    std::unique_ptr<SDXLAttentiveEraser> m_sdxl_attentive;
 };
 
 }  // namespace genai
