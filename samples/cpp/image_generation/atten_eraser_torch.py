@@ -46,7 +46,7 @@ MODEL_CONFIG = {
     "SDXL": {
         "model_name": "stabilityai/stable-diffusion-xl-base-1.0",
         "pipeline": DiffusionPipeline,
-        "custom_pipeline": "pipeline_stable_diffusion_xl_attentive_eraser",
+        "custom_pipeline": "./atten_eraser_pipeline/pipeline_stable_diffusion_xl_attentive_eraser.py",
         "height": 1024,
         "width": 1024,
         "mask_blur_kernel": 77,
