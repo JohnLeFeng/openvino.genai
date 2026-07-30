@@ -125,6 +125,8 @@ class AAS_Base(AttentionBase):
         self.mask = mask  # mask with shape (1, 1 ,h, w)
         self.ss_steps = ss_steps
         self.ss_scale = ss_scale
+        self.is_mask_attn = False
+        self.aas_modified_attention_calls = 0
         print("AAS at denoising steps: ", self.step_idx)
         print("AAS at U-Net layers: ", self.layer_idx)
         print("start AAS")
@@ -167,10 +169,15 @@ class AAS_Base(AttentionBase):
         """
         Attention forward function
         """
-        if is_cross or self.cur_step not in self.step_idx or self.cur_att_layer // 2 not in self.layer_idx:
+        if (
+            not self.is_mask_attn
+            or is_cross
+            or self.cur_step not in self.step_idx
+            or self.cur_att_layer // 2 not in self.layer_idx
+        ):
             return super().forward(q, k, v, sim, attn, is_cross, place_in_unet, num_heads, **kwargs)
 
-        B = q.shape[0] // num_heads // 2
+        self.aas_modified_attention_calls += 1
         H = W = int(np.sqrt(q.shape[1]))
 
         if H == 16:
@@ -182,27 +189,8 @@ class AAS_Base(AttentionBase):
         else:
             mask = self.mask_64.to(sim.device)
 
-        q_wo, q_w = q.chunk(2)
-        k_wo, k_w = k.chunk(2)
-        v_wo, v_w = v.chunk(2)
-        sim_wo, sim_w = sim.chunk(2)
-        attn_wo, attn_w = attn.chunk(2)
-
-        out_source = self.attn_batch(
-            q_wo,
-            k_wo,
-            v_wo,
-            sim_wo,
-            attn_wo,
-            is_cross,
-            place_in_unet,
-            num_heads,
-            is_mask_attn=False,
-            mask=None,
-            **kwargs,
-        )
         out_target = self.attn_batch(
-            q_w, k_w, v_w, sim_w, attn_w, is_cross, place_in_unet, num_heads, is_mask_attn=True, mask=mask, **kwargs
+            q, k, v, sim, attn, is_cross, place_in_unet, num_heads, is_mask_attn=True, mask=mask, **kwargs
         )
 
         if self.mask is not None:
@@ -213,8 +201,7 @@ class AAS_Base(AttentionBase):
             else:
                 out_target = out_target
 
-        out = torch.cat([out_source, out_target], dim=0)
-        return out
+        return out_target
 
 
 def prepare_mask_and_masked_image(image, mask, height, width, return_image: bool = False):
@@ -1671,9 +1658,12 @@ class StableDiffusionInpaintPipeline(
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
         self._num_timesteps = len(timesteps)
         # with self.progress_bar(total=num_inference_steps) as progress_bar:
-        prompt_embeds = torch.cat([prompt_embeds, prompt_embeds])
         latents_list_denoise = [latents]
         pred_x0_list_denoise = []
+        batch1_source_calls = 0
+        batch1_target_calls = 0
+        max_unet_batch = 0
+        max_prediction_delta = 0.0
         for i, t in enumerate(timesteps):
             if self.interrupt:
                 continue
@@ -1689,21 +1679,20 @@ class StableDiffusionInpaintPipeline(
                 )
 
             latents = (1 - init_mask) * init_latents_proper + init_mask * latents """
-            # expand the latents if we are doing classifier free guidance
-            latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
+            if self.do_classifier_free_guidance:
+                raise ValueError("Batch-1 AAS removal guidance requires guidance_scale=1")
 
-            # perform removal guidance
-            latent_model_input_rm = torch.cat([latents] * 2)
-
-            # concat latents, mask, masked_image_latents in the channel dimension
-            # latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
-            latent_model_input = self.scheduler.scale_model_input(latent_model_input_rm, t)
+            latent_model_input = self.scheduler.scale_model_input(latents, t)
 
             if num_channels_unet == 9:
                 latent_model_input = torch.cat([latent_model_input, mask, masked_image_latents], dim=1)
 
-            # predict the noise residual
-            noise_pred = self.unet(
+            if latent_model_input.shape[0] != 1:
+                raise RuntimeError(f"Expected batch-1 UNet input, got {latent_model_input.shape[0]}")
+
+            editor_state = (editor.cur_step, editor.cur_att_layer)
+            editor.is_mask_attn = False
+            noise_pred_wo = self.unet(
                 latent_model_input,
                 t,
                 encoder_hidden_states=prompt_embeds,
@@ -1712,16 +1701,24 @@ class StableDiffusionInpaintPipeline(
                 added_cond_kwargs=added_cond_kwargs,
                 return_dict=False,
             )[0]
+            batch1_source_calls += 1
+            max_unet_batch = max(max_unet_batch, latent_model_input.shape[0])
 
-            # perform guidance
-            if self.do_classifier_free_guidance:
-                noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
-
-            # perform removal guidance
-            noise_pred_wo, noise_pred_w = noise_pred.chunk(2)
+            editor.cur_step, editor.cur_att_layer = editor_state
+            editor.is_mask_attn = True
+            noise_pred_w = self.unet(
+                latent_model_input,
+                t,
+                encoder_hidden_states=prompt_embeds,
+                timestep_cond=timestep_cond,
+                cross_attention_kwargs=self.cross_attention_kwargs,
+                added_cond_kwargs=added_cond_kwargs,
+                return_dict=False,
+            )[0]
+            batch1_target_calls += 1
 
             delta = noise_pred_w - noise_pred_wo
+            max_prediction_delta = max(max_prediction_delta, delta.abs().max().item())
             """              
             #if i >= 9 and i <= 13:
             if i <= 6: #9
@@ -1773,6 +1770,25 @@ class StableDiffusionInpaintPipeline(
                 if callback is not None and i % callback_steps == 0:
                     step_idx = i // getattr(self.scheduler, "order", 1)
                     callback(step_idx, t, latents)
+
+        if batch1_source_calls != len(timesteps) or batch1_target_calls != len(timesteps):
+            raise RuntimeError(
+                f"Invalid batch-1 AAS call counts: source={batch1_source_calls}, "
+                f"target={batch1_target_calls}, steps={len(timesteps)}"
+            )
+        if max_unet_batch != 1 or editor.aas_modified_attention_calls == 0 or max_prediction_delta == 0.0:
+            raise RuntimeError(
+                f"Batch-1 AAS validation failed: max_unet_batch={max_unet_batch}, "
+                f"aas_modified_attention_calls={editor.aas_modified_attention_calls}, "
+                f"max_prediction_delta={max_prediction_delta}"
+            )
+        print(
+            "Batch-1 AAS pipeline validated: "
+            f"source_calls={batch1_source_calls}, target_calls={batch1_target_calls}, "
+            f"max_unet_batch={max_unet_batch}, "
+            f"aas_modified_attention_calls={editor.aas_modified_attention_calls}, "
+            f"max_prediction_delta={max_prediction_delta:.6f}"
+        )
         """ 
         if not output_type == "latent":
             condition_kwargs = {}
