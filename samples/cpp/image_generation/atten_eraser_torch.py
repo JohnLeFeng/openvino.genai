@@ -468,7 +468,9 @@ def main():
 
     if not export_model_only:
         output_dir.mkdir(parents=True, exist_ok=True)
-        output_image_path = output_dir / "result.png"
+        # Add tag to filename indicating which AAS method was used
+        aas_tag = "improved_aas" if args.use_improved_aas else "original_aas"
+        output_image_path = output_dir / f"result_{aas_tag}.png"
         image.save(output_image_path)
         print(f"Object removal completed. Image saved to {output_image_path}")
 
