@@ -175,14 +175,15 @@ def _runtime_aas_masked_attention(
     if not is_mask_attn:
         return attention_output(attn)
 
-    mask_flatten = mask.flatten(0)
+    mask_flatten = mask.reshape(-1)
+    key_mask = mask.reshape(1, 1, -1)
+    mask_penalty = key_mask.masked_fill(key_mask == 1, torch.finfo(sim.dtype).min)
     
     # Use single-softmax output gating or original dual-softmax AAS.
     if hasattr(self, "use_single_softmax_output_gating") and self.use_single_softmax_output_gating:
         # ========== EXPERIMENTAL: Single-softmax output gating ==========
-        mask_penalty = mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
         sim_masked = sim + mask_penalty
-        attn_weights = sim_masked.softmax(-1)
+        attn_weights = sim_masked.softmax(dim=2)
         out_base = attention_output(attn_weights)
         out_fg = out_base
         out_bg = out_base
@@ -193,9 +194,10 @@ def _runtime_aas_masked_attention(
             out_fg = out_base * mask_suppression.unsqueeze(-1).unsqueeze(0)
     else:
         # ========== ORIGINAL APPROACH: Dual-softmax with ss_scale*sim ==========
-        mask_penalty = mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
-        out_bg = attention_output((sim + mask_penalty).softmax(-1))
-        out_fg = attention_output((self.ss_scale * sim + mask_penalty).softmax(-1))
+        sim_bg = sim + mask_penalty
+        sim_fg = self.ss_scale * sim + mask_penalty
+        out_bg = attention_output(sim_bg.softmax(dim=2))
+        out_fg = attention_output(sim_fg.softmax(dim=2))
         out_fg = torch.where(self.runtime_cur_step <= self.runtime_ss_steps, out_fg, out_bg)
     
     return torch.cat([out_fg, out_bg], dim=0)
@@ -287,7 +289,7 @@ def convert_unet_to_openvino(
             setattr(
                 editor,
                 f"mask_{res}",
-                F.max_pool2d(mask, (height // res, width // res)).round().squeeze().squeeze(),
+                F.max_pool2d(mask, (height // res, width // res)).round().squeeze(0).squeeze(0),
             )
 
     class UNetWrapperSDXL(torch.nn.Module):
