@@ -100,7 +100,7 @@ class AAS_Base(AttentionBase):
         model_type="SD",
         ss_steps=9,
         ss_scale=1.0,
-        use_improved_aas=False,
+        use_single_softmax_output_gating=False,
     ):
         """
         Args:
@@ -114,7 +114,7 @@ class AAS_Base(AttentionBase):
             model_type: the model type, SD or SDXL
             ss_steps: number of steps to apply softmax scaling
             ss_scale: scale factor for foreground suppression
-            use_improved_aas: if True, use improved single-softmax approach; if False, use original dual-softmax
+            use_single_softmax_output_gating: if True, use experimental single-softmax output gating; if False, use original dual-softmax
         """
         super().__init__()
         self.attnstore = attnstore
@@ -129,8 +129,12 @@ class AAS_Base(AttentionBase):
         self.mask = mask  # mask with shape (1, 1 ,h, w)
         self.ss_steps = ss_steps
         self.ss_scale = ss_scale
-        self.use_improved_aas = use_improved_aas
-        aas_method = "IMPROVED (single-softmax + mask_suppression)" if use_improved_aas else "ORIGINAL (dual-softmax)"
+        self.use_single_softmax_output_gating = use_single_softmax_output_gating
+        aas_method = (
+            "EXPERIMENTAL (single-softmax output gating)"
+            if use_single_softmax_output_gating
+            else "ORIGINAL (dual-softmax)"
+        )
         print("AAS method: ", aas_method)
         print("AAS at denoising steps: ", self.step_idx)
         print("AAS at U-Net layers: ", self.layer_idx)
@@ -155,11 +159,11 @@ class AAS_Base(AttentionBase):
             out = rearrange(out, "(h1 h) (b n) d -> (h1 b) n (h d)", b=B, h=num_heads)
             return out
         
-        # Mask attention - choose approach based on use_improved_aas
+        # Mask attention - choose between output gating and original AAS.
         mask_flatten = mask.flatten(0)
         
-        if self.use_improved_aas:
-            # ========== IMPROVED APPROACH: Single-softmax + mask_suppression ==========
+        if self.use_single_softmax_output_gating:
+            # ========== EXPERIMENTAL: Single-softmax output gating ==========
             # This creates only 1 softmax operation (vs 2 in original)
             # and achieves better suppression of masked regions
             
@@ -1349,7 +1353,7 @@ class StableDiffusionInpaintPipeline(
         AAS_start_step: int = 0,  # AE parameter
         AAS_start_layer: int = 34,  # AE parameter
         AAS_end_layer: int = 70,  # AE parameter
-        use_improved_aas: bool = False,  # AE parameter: use improved single-softmax approach
+        use_single_softmax_output_gating: bool = False,  # AE parameter: experimental output gating
         negative_prompt: Optional[Union[str, List[str]]] = None,
         num_images_per_prompt: Optional[int] = 1,
         eta: float = 0.0,
@@ -1726,7 +1730,7 @@ class StableDiffusionInpaintPipeline(
                 model_type="SD",
                 ss_steps=self._ss_steps,
                 ss_scale=self._ss_scale,
-                use_improved_aas=use_improved_aas,
+                use_single_softmax_output_gating=use_single_softmax_output_gating,
             )
             self.regiter_attention_editor_diffusers(self.unet, editor)
 

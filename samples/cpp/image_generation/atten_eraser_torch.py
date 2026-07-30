@@ -86,9 +86,9 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--intermediate-steps", type=int, default=1, help="Save intermediate result every N steps (default: 1)"
     )
     parser.add_argument(
-        "--use-improved-aas",
+        "--use-single-softmax-output-gating",
         action="store_true",
-        help="Use improved single-softmax AAS approach (default: False, use original dual-softmax)",
+        help="Use experimental single-softmax output gating (default: False, use original dual-softmax AAS)",
     )
     return parser.parse_args(argv)
 
@@ -177,9 +177,9 @@ def _runtime_aas_masked_attention(
 
     mask_flatten = mask.flatten(0)
     
-    # Use improved or original approach based on use_improved_aas flag
-    if hasattr(self, 'use_improved_aas') and self.use_improved_aas:
-        # ========== IMPROVED APPROACH: Single-softmax + mask_suppression ==========
+    # Use single-softmax output gating or original dual-softmax AAS.
+    if hasattr(self, "use_single_softmax_output_gating") and self.use_single_softmax_output_gating:
+        # ========== EXPERIMENTAL: Single-softmax output gating ==========
         mask_penalty = mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
         sim_masked = sim + mask_penalty
         attn_weights = sim_masked.softmax(-1)
@@ -458,7 +458,7 @@ def main():
         AAS_start_step=model_config["AAS_start_step"],  # AAS start step
         AAS_start_layer=model_config["AAS_start_layer"],  # AAS start layer
         AAS_end_layer=model_config["AAS_end_layer"],  # AAS end layer
-        use_improved_aas=args.use_improved_aas,  # improved single-softmax approach
+        use_single_softmax_output_gating=args.use_single_softmax_output_gating,
         num_inference_steps=num_inference_steps,  # AAS_end_step = int(strength*num_inference_steps)
         generator=generator,
         guidance_scale=1,
@@ -469,7 +469,7 @@ def main():
     if not export_model_only:
         output_dir.mkdir(parents=True, exist_ok=True)
         # Add tag to filename indicating which AAS method was used
-        aas_tag = "improved_aas" if args.use_improved_aas else "original_aas"
+        aas_tag = "single_softmax_output_gating" if args.use_single_softmax_output_gating else "original_aas"
         output_image_path = output_dir / f"result_{aas_tag}.png"
         image.save(output_image_path)
         print(f"Object removal completed. Image saved to {output_image_path}")
