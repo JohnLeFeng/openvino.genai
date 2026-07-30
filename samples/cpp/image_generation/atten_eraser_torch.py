@@ -85,6 +85,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--intermediate-steps", type=int, default=1, help="Save intermediate result every N steps (default: 1)"
     )
+    parser.add_argument(
+        "--use-improved-aas",
+        action="store_true",
+        help="Use improved single-softmax AAS approach (default: False, use original dual-softmax)",
+    )
     return parser.parse_args(argv)
 
 
@@ -171,10 +176,28 @@ def _runtime_aas_masked_attention(
         return attention_output(attn)
 
     mask_flatten = mask.flatten(0)
-    mask_penalty = mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
-    out_bg = attention_output((sim + mask_penalty).softmax(-1))
-    out_fg = attention_output((self.ss_scale * sim + mask_penalty).softmax(-1))
-    out_fg = torch.where(self.runtime_cur_step <= self.runtime_ss_steps, out_fg, out_bg)
+    
+    # Use improved or original approach based on use_improved_aas flag
+    if hasattr(self, 'use_improved_aas') and self.use_improved_aas:
+        # ========== IMPROVED APPROACH: Single-softmax + mask_suppression ==========
+        mask_penalty = mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
+        sim_masked = sim + mask_penalty
+        attn_weights = sim_masked.softmax(-1)
+        out_base = attention_output(attn_weights)
+        out_fg = out_base
+        out_bg = out_base
+        
+        # Apply mask_suppression only during ss_steps
+        if self.runtime_cur_step <= self.runtime_ss_steps:
+            mask_suppression = 1.0 - mask_flatten * (1.0 - self.ss_scale)
+            out_fg = out_base * mask_suppression.unsqueeze(-1).unsqueeze(0)
+    else:
+        # ========== ORIGINAL APPROACH: Dual-softmax with ss_scale*sim ==========
+        mask_penalty = mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
+        out_bg = attention_output((sim + mask_penalty).softmax(-1))
+        out_fg = attention_output((self.ss_scale * sim + mask_penalty).softmax(-1))
+        out_fg = torch.where(self.runtime_cur_step <= self.runtime_ss_steps, out_fg, out_bg)
+    
     return torch.cat([out_fg, out_bg], dim=0)
 
 
@@ -435,6 +458,7 @@ def main():
         AAS_start_step=model_config["AAS_start_step"],  # AAS start step
         AAS_start_layer=model_config["AAS_start_layer"],  # AAS start layer
         AAS_end_layer=model_config["AAS_end_layer"],  # AAS end layer
+        use_improved_aas=args.use_improved_aas,  # improved single-softmax approach
         num_inference_steps=num_inference_steps,  # AAS_end_step = int(strength*num_inference_steps)
         generator=generator,
         guidance_scale=1,
