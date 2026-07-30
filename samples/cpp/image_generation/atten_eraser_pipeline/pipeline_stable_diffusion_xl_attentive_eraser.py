@@ -259,6 +259,10 @@ class AAS_XL(AttentionBase):
         if len(attn) == 2 * len(v):
             v = torch.cat([v] * 2)
         out = torch.einsum("h i j, h j d -> h i d", attn, v)
+        if is_mask_attn and self.use_single_softmax_output_gating and self.cur_step <= self.ss_steps:
+            mask_suppression = 1.0 - mask_flatten * (1.0 - self.ss_scale)
+            out_fg = out * mask_suppression.unsqueeze(0).unsqueeze(-1)
+            out = torch.cat([out_fg, out], dim=0)
         out = rearrange(out, "(h1 h) (b n) d -> (h1 b) n (h d)", b=B, h=num_heads)
         return out
 
