@@ -3,11 +3,46 @@
 
 #include "openvino/genai/image_generation/inpainting_pipeline.hpp"
 
+#include <algorithm>
 #include <chrono>
 
 #include "imwrite.hpp"
 #include "load_image.hpp"
 #include "progress_bar.hpp"
+
+namespace {
+
+ov::Tensor resize_nearest(const ov::Tensor& input, size_t target_height, size_t target_width) {
+    const ov::Shape& shape = input.get_shape();
+    OPENVINO_ASSERT(input.get_element_type() == ov::element::u8 && shape.size() == 4,
+                    "Input must be a rank-4 NHWC u8 tensor");
+    if (shape[1] == target_height && shape[2] == target_width) {
+        return input;
+    }
+
+    const size_t batch_size = shape[0];
+    const size_t source_height = shape[1];
+    const size_t source_width = shape[2];
+    const size_t channels = shape[3];
+    ov::Tensor result(ov::element::u8, {batch_size, target_height, target_width, channels});
+    const uint8_t* source = input.data<const uint8_t>();
+    uint8_t* destination = result.data<uint8_t>();
+
+    for (size_t batch = 0; batch < batch_size; ++batch) {
+        for (size_t y = 0; y < target_height; ++y) {
+            const size_t source_y = y * source_height / target_height;
+            for (size_t x = 0; x < target_width; ++x) {
+                const size_t source_x = x * source_width / target_width;
+                const size_t source_index = ((batch * source_height + source_y) * source_width + source_x) * channels;
+                const size_t destination_index = ((batch * target_height + y) * target_width + x) * channels;
+                std::copy_n(source + source_index, channels, destination + destination_index);
+            }
+        }
+    }
+    return result;
+}
+
+}  // namespace
 
 int32_t main(int32_t argc, char* argv[]) try {
     OPENVINO_ASSERT(argc >= 4 && argc <= 6,
@@ -21,16 +56,25 @@ int32_t main(int32_t argc, char* argv[]) try {
     const std::string device = argc >= 5 ? argv[4] : "CPU";
     const size_t seed = argc == 6 ? std::stoull(argv[5]) : 123;
 
-    ov::Tensor image = utils::load_image(image_path);
-    ov::Tensor mask_image = utils::load_image(mask_image_path);
-
     ov::genai::InpaintingPipeline pipeline(
         models_path,
         device,
         ov::genai::inpainting_mode(ov::genai::InpaintingMode::ATTENTIVE_ERASER));
 
     ov::genai::ImageGenerationConfig config = pipeline.get_generation_config();
-    config.strength = 1.0f;
+    const size_t target_height = static_cast<size_t>(config.height);
+    const size_t target_width = static_cast<size_t>(config.width);
+    ov::Tensor image = utils::load_image(image_path);
+    ov::Tensor mask_image = utils::load_image(mask_image_path);
+    const bool needs_resize = image.get_shape()[1] != target_height || image.get_shape()[2] != target_width ||
+                              mask_image.get_shape()[1] != target_height || mask_image.get_shape()[2] != target_width;
+    if (needs_resize) {
+        std::cout << "Resizing image and mask to " << target_width << 'x' << target_height << '\n';
+    }
+    image = resize_nearest(image, target_height, target_width);
+    mask_image = resize_nearest(mask_image, target_height, target_width);
+
+    config.strength = 0.8f;
     config.num_inference_steps = 50;
     config.rng_seed = seed;
     config.attentive_eraser->rm_guidance_scale = 9.0f;
