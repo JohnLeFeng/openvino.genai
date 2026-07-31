@@ -679,7 +679,6 @@ void init_image_generation_pipelines(py::module_& m) {
         .def("get_generation_config", &ov::genai::InpaintingPipeline::get_generation_config, py::return_value_policy::copy)
         .def("set_generation_config", &ov::genai::InpaintingPipeline::set_generation_config, py::arg("config"))
         .def("set_scheduler", &ov::genai::InpaintingPipeline::set_scheduler, py::arg("scheduler"))
-        .def("set_attentive_eraser_mode", &ov::genai::InpaintingPipeline::set_attentive_eraser_mode, py::arg("enable"), "Enable or disable Attentive Eraser mode for inpainting")
         .def("reshape", &ov::genai::InpaintingPipeline::reshape, py::arg("num_images_per_prompt"), py::arg("height"), py::arg("width"), py::arg("guidance_scale"))
         .def_static("stable_diffusion", &ov::genai::InpaintingPipeline::stable_diffusion, py::arg("scheduler"), py::arg("clip_text_model"), py::arg("unet"), py::arg("vae"))
         .def_static("latent_consistency_model", &ov::genai::InpaintingPipeline::latent_consistency_model, py::arg("scheduler"), py::arg("clip_text_model"), py::arg("unet"), py::arg("vae"))

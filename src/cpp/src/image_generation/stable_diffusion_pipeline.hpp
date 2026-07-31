@@ -9,53 +9,34 @@
 #include <filesystem>
 
 #include "image_generation/diffusion_pipeline.hpp"
+#include "image_generation/attentive_eraser.hpp"
 #include "image_generation/threaded_callback.hpp"
 
 #include "openvino/genai/image_generation/clip_text_model.hpp"
 #include "openvino/genai/image_generation/clip_text_model_with_projection.hpp"
 #include "openvino/genai/image_generation/unet2d_condition_model.hpp"
-#include "openvino/genai/image_generation/sd_attentive_eraser.hpp"
 
 #include "openvino/runtime/core.hpp"
 
 #include "json_utils.hpp"
 #include "lora/helper.hpp"
 #include "numpy_utils.hpp"
+#include "schedulers/ddim.hpp"
 
 namespace ov {
 namespace genai {
-
-namespace {
-
-template <typename Config>
-Config translate_sd_config(const ImageGenerationConfig& config, const ov::AnyMap& properties) {
-    OPENVINO_ASSERT(config.attentive_eraser.has_value(),
-                    "ImageGenerationConfig.attentive_eraser must be set in attentive eraser mode");
-    Config translated;
-    translated.rm_guidance_scale = config.attentive_eraser->rm_guidance_scale;
-    translated.ss_steps = config.attentive_eraser->ss_steps;
-    translated.strength = config.strength;
-    translated.num_inference_steps = config.num_inference_steps;
-    translated.rng_seed = config.rng_seed;
-    translated.generator = config.generator;
-
-    const auto callback_iter = properties.find(ov::genai::callback.name());
-    if (callback_iter != properties.end()) {
-        translated.callback = callback_iter->second.as<std::function<bool(size_t, size_t, ov::Tensor&)>>();
-    }
-    return translated;
-}
-
-}  // namespace
 
 class StableDiffusionPipeline : public DiffusionPipeline {
 public:
     explicit StableDiffusionPipeline(PipelineType pipeline_type) :
         DiffusionPipeline(pipeline_type) {}
 
-    StableDiffusionPipeline(PipelineType pipeline_type, const std::filesystem::path& root_dir) :
+    StableDiffusionPipeline(PipelineType pipeline_type,
+                            const std::filesystem::path& root_dir,
+                            bool use_attentive_eraser = false) :
         StableDiffusionPipeline(pipeline_type) {
         m_root_dir = root_dir;
+        m_use_attentive_eraser = use_attentive_eraser;
         const std::filesystem::path model_index_path = root_dir / "model_index.json";
         std::ifstream file(model_index_path);
         OPENVINO_ASSERT(file.is_open(), "Failed to open ", model_index_path);
@@ -63,7 +44,8 @@ public:
         nlohmann::json data = nlohmann::json::parse(file);
         using utils::read_json_param;
 
-        set_scheduler(Scheduler::from_config(root_dir / "scheduler/scheduler_config.json"));
+        set_scheduler(create_attentive_eraser_scheduler(root_dir / "scheduler/scheduler_config.json",
+                                m_use_attentive_eraser));
 
         const std::string text_encoder = data["text_encoder"][1].get<std::string>();
         if (text_encoder == "CLIPTextModel") {
@@ -74,6 +56,10 @@ public:
 
         const std::string unet = data["unet"][1].get<std::string>();
         if (unet == "UNet2DConditionModel") {
+            auto unet_model = utils::singleton_core().read_model(root_dir / "unet" / "openvino_model.xml");
+            validate_attentive_eraser_unet_inputs(unet_model,
+                                                   AttentiveEraserModelFamily::STABLE_DIFFUSION,
+                                                   m_use_attentive_eraser);
             m_unet = std::make_shared<UNet2DConditionModel>(root_dir / "unet");
         } else {
             OPENVINO_THROW("Unsupported '", unet, "' UNet type");
@@ -92,31 +78,19 @@ public:
             OPENVINO_THROW("Unsupported '", vae, "' VAE decoder type");
         }
 
-        // Detect model hidden size (SD1.5=768, SD2=1024) from UNet encoder_hidden_states input
-        auto unet_model = utils::singleton_core().read_model(root_dir / "unet" / "openvino_model.xml");
-        const auto hidden_states_shape = unet_model->input("encoder_hidden_states").get_partial_shape();
-        OPENVINO_ASSERT(hidden_states_shape.rank().is_static() && hidden_states_shape.rank().get_length() == 3,
-                        "SD Attentive Eraser UNet input 'encoder_hidden_states' must have rank 3");
-        if (hidden_states_shape[2].is_static()) {
-            m_attentive_eraser_hidden_size = hidden_states_shape[2].get_length();
-        } else {
-            auto text_encoder_model = utils::singleton_core().read_model(root_dir / "text_encoder" / "openvino_model.xml");
-            const auto text_hidden_shape = text_encoder_model->output("last_hidden_state").get_partial_shape();
-            OPENVINO_ASSERT(text_hidden_shape.rank().is_static() && text_hidden_shape.rank().get_length() == 3 &&
-                                text_hidden_shape[2].is_static(),
-                            "SD text encoder output 'last_hidden_state' must expose a static hidden width");
-            m_attentive_eraser_hidden_size = text_hidden_shape[2].get_length();
-        }
-        OPENVINO_ASSERT(m_attentive_eraser_hidden_size == 768 || m_attentive_eraser_hidden_size == 1024,
-                        "SD conditioning must have hidden width 768 or 1024, got ", m_attentive_eraser_hidden_size);
-
         // initialize generation config
         initialize_generation_config(data["_class_name"].get<std::string>());
+        initialize_attentive_eraser_generation_config();
     }
 
-    StableDiffusionPipeline(PipelineType pipeline_type, const std::filesystem::path& root_dir, const std::string& device, const ov::AnyMap& properties) :
+    StableDiffusionPipeline(PipelineType pipeline_type,
+                            const std::filesystem::path& root_dir,
+                            const std::string& device,
+                            const ov::AnyMap& properties,
+                            bool use_attentive_eraser = false) :
         StableDiffusionPipeline(pipeline_type) {
         m_root_dir = root_dir;
+        m_use_attentive_eraser = use_attentive_eraser;
         const std::filesystem::path model_index_path = root_dir / "model_index.json";
         std::ifstream file(model_index_path);
         OPENVINO_ASSERT(file.is_open(), "Failed to open ", model_index_path);
@@ -124,7 +98,8 @@ public:
         nlohmann::json data = nlohmann::json::parse(file);
         using utils::read_json_param;
 
-        set_scheduler(Scheduler::from_config(root_dir / "scheduler/scheduler_config.json"));
+        set_scheduler(create_attentive_eraser_scheduler(root_dir / "scheduler/scheduler_config.json",
+                                m_use_attentive_eraser));
 
         auto updated_properties = update_adapters_in_properties(properties, &DiffusionPipeline::derived_adapters);
 
@@ -137,6 +112,10 @@ public:
 
         const std::string unet = data["unet"][1].get<std::string>();
         if (unet == "UNet2DConditionModel") {
+            auto unet_model = utils::singleton_core().read_model(root_dir / "unet" / "openvino_model.xml");
+            validate_attentive_eraser_unet_inputs(unet_model,
+                                                   AttentiveEraserModelFamily::STABLE_DIFFUSION,
+                                                   m_use_attentive_eraser);
             m_unet = std::make_shared<UNet2DConditionModel>(root_dir / "unet", device, *updated_properties);
         } else {
             OPENVINO_THROW("Unsupported '", unet, "' UNet type");
@@ -155,26 +134,9 @@ public:
             OPENVINO_THROW("Unsupported '", vae, "' VAE decoder type");
         }
 
-        // Detect model hidden size (SD1.5=768, SD2=1024) from UNet encoder_hidden_states input
-        auto unet_model = utils::singleton_core().read_model(root_dir / "unet" / "openvino_model.xml");
-        const auto hidden_states_shape = unet_model->input("encoder_hidden_states").get_partial_shape();
-        OPENVINO_ASSERT(hidden_states_shape.rank().is_static() && hidden_states_shape.rank().get_length() == 3,
-                        "SD Attentive Eraser UNet input 'encoder_hidden_states' must have rank 3");
-        if (hidden_states_shape[2].is_static()) {
-            m_attentive_eraser_hidden_size = hidden_states_shape[2].get_length();
-        } else {
-            auto text_encoder_model = utils::singleton_core().read_model(root_dir / "text_encoder" / "openvino_model.xml");
-            const auto text_hidden_shape = text_encoder_model->output("last_hidden_state").get_partial_shape();
-            OPENVINO_ASSERT(text_hidden_shape.rank().is_static() && text_hidden_shape.rank().get_length() == 3 &&
-                                text_hidden_shape[2].is_static(),
-                            "SD text encoder output 'last_hidden_state' must expose a static hidden width");
-            m_attentive_eraser_hidden_size = text_hidden_shape[2].get_length();
-        }
-        OPENVINO_ASSERT(m_attentive_eraser_hidden_size == 768 || m_attentive_eraser_hidden_size == 1024,
-                        "SD conditioning must have hidden width 768 or 1024, got ", m_attentive_eraser_hidden_size);
-
         // initialize generation config
         initialize_generation_config(data["_class_name"].get<std::string>());
+        initialize_attentive_eraser_generation_config();
 
         update_adapters_from_properties(properties, m_generation_config.adapters);
     }
@@ -183,8 +145,10 @@ public:
         PipelineType pipeline_type,
         const CLIPTextModel& clip_text_model,
         const UNet2DConditionModel& unet,
-        const AutoencoderKL& vae)
+        const AutoencoderKL& vae,
+        bool use_attentive_eraser = false)
         : StableDiffusionPipeline(pipeline_type) {
+        m_use_attentive_eraser = use_attentive_eraser;
         m_clip_text_encoder = std::make_shared<CLIPTextModel>(clip_text_model);
         m_unet = std::make_shared<UNet2DConditionModel>(unet);
         m_vae = std::make_shared<AutoencoderKL>(vae);
@@ -196,11 +160,9 @@ public:
 
     StableDiffusionPipeline(PipelineType pipeline_type, const StableDiffusionPipeline& pipe) :
         DiffusionPipeline(pipeline_type),
-        m_use_attentive_eraser(false),
-        m_sd15(nullptr),
-        m_sd2(nullptr),
-        m_attentive_eraser_hidden_size(pipe.m_attentive_eraser_hidden_size) {
-        // Copy construction: initialize attentive eraser members as nullptr (lazy init)
+        m_use_attentive_eraser(pipe.m_use_attentive_eraser) {
+        OPENVINO_ASSERT(!pipe.m_use_attentive_eraser,
+                "Cannot convert an Attentive Eraser inpainting pipeline to another pipeline type");
         m_root_dir = pipe.m_root_dir;
         m_clip_text_encoder = std::make_shared<CLIPTextModel>(*pipe.m_clip_text_encoder);
         m_unet = std::make_shared<UNet2DConditionModel>(*pipe.m_unet);
@@ -226,20 +188,6 @@ public:
         m_vae->reshape(num_images_per_prompt, height, width);
     }
 
-    void set_attentive_eraser_mode(bool enable) override {
-        m_use_attentive_eraser = enable;
-        if (enable) {
-            // Initialize attentive eraser engines if not already done
-            if (!m_root_dir.empty() && !m_sd15 && !m_sd2) {
-                if (m_attentive_eraser_hidden_size == 768) {
-                    m_sd15 = std::make_unique<SD15AttentiveEraser>(m_root_dir);
-                } else {
-                    m_sd2 = std::make_unique<SD2AttentiveEraser>(m_root_dir);
-                }
-            }
-        }
-    }
-
     void compile(const std::string& text_encode_device,
         const std::string& denoise_device,
         const std::string& vae_device,
@@ -251,14 +199,6 @@ public:
         m_unet->compile(denoise_device, *updated_properties);
         m_vae->compile(vae_device, *updated_properties);
 
-        // Compile attentive eraser engines if enabled
-        if (m_use_attentive_eraser) {
-            if (m_sd15) {
-                m_sd15->compile(text_encode_device, *updated_properties);
-            } else if (m_sd2) {
-                m_sd2->compile(text_encode_device, *updated_properties);
-            }
-        }
     }
 
     std::shared_ptr<DiffusionPipeline> clone() override {
@@ -271,10 +211,12 @@ public:
             m_pipeline_type,
             *clip_text_encoder,
             *unet,
-            *vae);
+            *vae,
+            m_use_attentive_eraser);
 
         pipeline->m_root_dir = m_root_dir;
-        pipeline->set_scheduler(Scheduler::from_config(m_root_dir / "scheduler/scheduler_config.json"));
+        pipeline->set_scheduler(create_attentive_eraser_scheduler(m_root_dir / "scheduler/scheduler_config.json",
+                                      m_use_attentive_eraser));
         pipeline->set_generation_config(m_generation_config);
         return pipeline;
     }
@@ -392,39 +334,12 @@ public:
 
         // Handle attentive eraser mode
         if (m_use_attentive_eraser && m_pipeline_type == PipelineType::INPAINTING) {
-            OPENVINO_ASSERT(positive_prompt.empty(), "Attentive eraser mode requires an empty positive prompt");
-            OPENVINO_ASSERT(generation_config.attentive_eraser.has_value(),
-                            "ImageGenerationConfig.attentive_eraser must be set in attentive eraser mode");
-            OPENVINO_ASSERT(generation_config.guidance_scale == 1.0f, "Attentive eraser mode requires guidance_scale == 1.0");
-            OPENVINO_ASSERT(generation_config.negative_prompt == std::nullopt &&
-                                generation_config.negative_prompt_2 == std::nullopt &&
-                                generation_config.negative_prompt_3 == std::nullopt,
-                            "Attentive eraser mode does not support negative prompts");
-            OPENVINO_ASSERT(generation_config.prompt_2 == std::nullopt && generation_config.prompt_3 == std::nullopt,
-                            "Attentive eraser mode does not support additional prompts");
-            OPENVINO_ASSERT(generation_config.strength > 0.0f && generation_config.strength <= 1.0f,
-                            "Attentive eraser strength must be in (0, 1]");
-            OPENVINO_ASSERT(generation_config.num_inference_steps > 0, "Attentive eraser num_inference_steps must be positive");
-            OPENVINO_ASSERT(generation_config.num_images_per_prompt == 1,
-                            "Attentive eraser mode supports num_images_per_prompt == 1 only");
-            OPENVINO_ASSERT(!generation_config.adapters.has_value(), "Attentive eraser mode does not support LoRA adapters");
-
-            if (m_sd15) {
-                m_perf_metrics.generate_duration =
-                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - gen_start)
-                        .count();
-                return m_sd15->generate(std::move(initial_image),
-                                        std::move(mask_image),
-                                        translate_sd_config<SDAttentiveEraserConfig>(generation_config, properties));
-            }
-            if (m_sd2) {
-                m_perf_metrics.generate_duration =
-                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - gen_start)
-                        .count();
-                return m_sd2->generate(std::move(initial_image),
-                                       std::move(mask_image),
-                                       translate_sd_config<SDAttentiveEraserConfig>(generation_config, properties));
-            }
+            return generate_attentive_eraser(positive_prompt,
+                                              std::move(initial_image),
+                                              std::move(mask_image),
+                                              properties,
+                                              generation_config,
+                                              gen_start);
         }
 
         // Stable Diffusion pipeline
@@ -559,6 +474,150 @@ public:
     }
 
 protected:
+    virtual size_t attentive_eraser_image_size() const {
+        return 512;
+    }
+
+    virtual size_t attentive_eraser_mask_blur_kernel() const {
+        return 7;
+    }
+
+    virtual void compute_attentive_eraser_hidden_states() {
+        const auto infer_start = std::chrono::steady_clock::now();
+        ov::Tensor hidden_states = m_clip_text_encoder->infer("", "", false);
+        m_perf_metrics.encoder_inference_duration["text_encoder"] =
+            std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - infer_start).count();
+        m_unet->set_hidden_states("encoder_hidden_states", numpy_utils::repeat(hidden_states, 2));
+    }
+
+    void initialize_attentive_eraser_generation_config() {
+        if (!m_use_attentive_eraser) {
+            return;
+        }
+        OPENVINO_ASSERT(m_pipeline_type == PipelineType::INPAINTING,
+                        "Attentive Eraser mode is available for inpainting pipelines only");
+        OPENVINO_ASSERT(std::dynamic_pointer_cast<DDIMScheduler>(m_scheduler),
+                        "Attentive Eraser mode requires a DDIM scheduler");
+        m_generation_config.guidance_scale = 1.0f;
+        m_generation_config.num_images_per_prompt = 1;
+        m_generation_config.attentive_eraser = AttentiveEraserConfig{};
+    }
+
+    ov::Tensor generate_attentive_eraser(const std::string& positive_prompt,
+                                          ov::Tensor initial_image,
+                                          ov::Tensor mask_image,
+                                          const ov::AnyMap& properties,
+                                          ImageGenerationConfig& generation_config,
+                                          std::chrono::steady_clock::time_point gen_start) {
+        OPENVINO_ASSERT(positive_prompt.empty(), "Attentive eraser mode requires an empty positive prompt");
+        OPENVINO_ASSERT(generation_config.attentive_eraser.has_value(),
+                        "ImageGenerationConfig.attentive_eraser must be set in attentive eraser mode");
+        OPENVINO_ASSERT(generation_config.guidance_scale == 1.0f,
+                        "Attentive eraser mode requires guidance_scale == 1.0");
+        OPENVINO_ASSERT(generation_config.negative_prompt == std::nullopt &&
+                            generation_config.negative_prompt_2 == std::nullopt &&
+                            generation_config.negative_prompt_3 == std::nullopt,
+                        "Attentive eraser mode does not support negative prompts");
+        OPENVINO_ASSERT(generation_config.prompt_2 == std::nullopt && generation_config.prompt_3 == std::nullopt,
+                        "Attentive eraser mode does not support additional prompts");
+        OPENVINO_ASSERT(generation_config.strength > 0.0f && generation_config.strength <= 1.0f,
+                        "Attentive eraser strength must be in (0, 1]");
+        OPENVINO_ASSERT(generation_config.num_inference_steps > 0,
+                        "Attentive eraser num_inference_steps must be positive");
+        OPENVINO_ASSERT(generation_config.num_images_per_prompt == 1,
+                        "Attentive eraser mode supports num_images_per_prompt == 1 only");
+        OPENVINO_ASSERT(!generation_config.adapters.has_value(),
+                        "Attentive eraser mode does not support LoRA adapters");
+        OPENVINO_ASSERT(std::dynamic_pointer_cast<DDIMScheduler>(m_scheduler),
+                        "Attentive Eraser mode requires a DDIM scheduler");
+
+        const size_t image_size = attentive_eraser_image_size();
+        attentive_eraser::validate_input_tensor(initial_image, "Initial image", false, image_size);
+        attentive_eraser::validate_input_tensor(mask_image, "Mask image", true, image_size);
+
+        std::shared_ptr<ThreadedCallbackWrapper> callback_ptr;
+        const auto callback_iter = properties.find(ov::genai::callback.name());
+        if (callback_iter != properties.end()) {
+            callback_ptr = std::make_shared<ThreadedCallbackWrapper>(
+                callback_iter->second.as<std::function<bool(size_t, size_t, ov::Tensor&)>>());
+            callback_ptr->start();
+        }
+
+        ov::Tensor processed_image = attentive_eraser::preprocess_image(initial_image);
+        ov::Tensor full_resolution_mask = attentive_eraser::preprocess_mask(
+            mask_image, attentive_eraser_mask_blur_kernel(), 0.1f);
+        ov::Tensor latent_mask = attentive_eraser::max_pool_mask(full_resolution_mask, 8);
+
+        const auto vae_encode_start = std::chrono::steady_clock::now();
+        ov::Tensor image_latent = m_vae->encode(processed_image, generation_config.generator);
+        m_perf_metrics.vae_encoder_inference_duration =
+            std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - vae_encode_start).count();
+        ov::Tensor noise = generation_config.generator->randn_tensor(image_latent.get_shape());
+
+        m_scheduler->set_timesteps(generation_config.num_inference_steps, generation_config.strength);
+        const std::vector<int64_t> timesteps = m_scheduler->get_timesteps();
+        OPENVINO_ASSERT(!timesteps.empty(), "DDIM scheduler produced no timesteps");
+
+        ov::Tensor latent(image_latent.get_element_type(), image_latent.get_shape());
+        image_latent.copy_to(latent);
+        m_scheduler->add_noise(latent, noise, timesteps.front());
+        compute_attentive_eraser_hidden_states();
+        m_unet->set_hidden_states("mask", full_resolution_mask);
+
+        ov::Tensor denoised = latent;
+        for (size_t step = 0; step < timesteps.size(); ++step) {
+            const auto iteration_start = std::chrono::steady_clock::now();
+            ov::Tensor current_step(ov::element::i64, {});
+            *current_step.data<int64_t>() = static_cast<int64_t>(step);
+            ov::Tensor ss_steps(ov::element::i64, {});
+            *ss_steps.data<int64_t>() = static_cast<int64_t>(generation_config.attentive_eraser->ss_steps);
+            m_unet->set_hidden_states("cur_step", current_step);
+            m_unet->set_hidden_states("ss_steps", ss_steps);
+
+            ov::Tensor latent_pair = numpy_utils::repeat(latent, 2);
+            ov::Tensor timestep(ov::element::i64, {});
+            *timestep.data<int64_t>() = timesteps[step];
+            const auto unet_start = std::chrono::steady_clock::now();
+            ov::Tensor noise_pair = m_unet->infer(latent_pair, timestep);
+            m_perf_metrics.raw_metrics.unet_inference_durations.push_back(
+                std::chrono::duration_cast<MicroSeconds>(std::chrono::steady_clock::now() - unet_start));
+            ov::Tensor guided_noise = attentive_eraser::removal_guidance(
+                noise_pair, generation_config.attentive_eraser->rm_guidance_scale);
+            auto scheduler_result = m_scheduler->step(guided_noise, latent, step, generation_config.generator);
+            latent = scheduler_result.at("latent");
+            const auto denoised_iter = scheduler_result.find("denoised");
+            denoised = denoised_iter == scheduler_result.end() ? latent : denoised_iter->second;
+
+            ov::Tensor initial_noised(image_latent.get_element_type(), image_latent.get_shape());
+            image_latent.copy_to(initial_noised);
+            if (step + 1 < timesteps.size()) {
+                m_scheduler->add_noise(initial_noised, noise, timesteps[step + 1]);
+            }
+            attentive_eraser::blend_latents(initial_noised, latent_mask, latent);
+            m_perf_metrics.raw_metrics.iteration_durations.push_back(
+                std::chrono::duration_cast<MicroSeconds>(std::chrono::steady_clock::now() - iteration_start));
+
+            if (callback_ptr && callback_ptr->has_callback() &&
+                callback_ptr->write(step, timesteps.size(), denoised) == CallbackStatus::STOP) {
+                callback_ptr->end();
+                m_perf_metrics.generate_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - gen_start).count();
+                return ov::Tensor(ov::element::u8, {});
+            }
+        }
+        if (callback_ptr) {
+            callback_ptr->end();
+        }
+
+        const auto vae_decode_start = std::chrono::steady_clock::now();
+        ov::Tensor image = decode(denoised);
+        m_perf_metrics.vae_decoder_inference_duration =
+            std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - vae_decode_start).count();
+        m_perf_metrics.generate_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - gen_start).count();
+        return image;
+    }
+
     size_t get_config_in_channels() const override {
         assert(m_unet != nullptr);
         return m_unet->get_config().in_channels;
@@ -650,9 +709,6 @@ protected:
 
     // Attentive eraser support
     bool m_use_attentive_eraser = false;
-    size_t m_attentive_eraser_hidden_size = 0;
-    std::unique_ptr<SD15AttentiveEraser> m_sd15;
-    std::unique_ptr<SD2AttentiveEraser> m_sd2;
 };
 
 }  // namespace genai

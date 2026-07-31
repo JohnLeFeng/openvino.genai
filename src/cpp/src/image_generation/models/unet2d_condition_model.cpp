@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "openvino/genai/image_generation/unet2d_condition_model.hpp"
+#include "image_generation/attentive_eraser.hpp"
 #include "image_generation/models/unet_inference_dynamic.hpp"
 #include "image_generation/models/unet_inference_static_bs1.hpp"
 
@@ -25,13 +26,17 @@ UNet2DConditionModel::Config::Config(const std::filesystem::path& config_path) {
 
     read_json_param(data, "in_channels", in_channels);
     read_json_param(data, "sample_size", sample_size);
+    read_json_param(data, "cross_attention_dim", cross_attention_dim);
     read_json_param(data, "time_cond_proj_dim", time_cond_proj_dim);
 }
 
 UNet2DConditionModel::UNet2DConditionModel(const std::filesystem::path& root_dir) :
     m_config(root_dir / "config.json") {
-    m_model = utils::singleton_core().read_model(root_dir / "openvino_model.xml");
     m_vae_scale_factor = get_vae_scale_factor(root_dir.parent_path() / "vae_decoder" / "config.json");
+    m_model = utils::singleton_core().read_model(root_dir / "openvino_model.xml");
+    reshape_attentive_eraser_unet_model(
+        m_model, m_config.sample_size, m_vae_scale_factor, m_config.cross_attention_dim);
+    m_model = prepare_attentive_eraser_unet_model(m_model);
 }
 
 UNet2DConditionModel::UNet2DConditionModel(const std::filesystem::path& root_dir,
@@ -48,6 +53,9 @@ UNet2DConditionModel::UNet2DConditionModel(const std::filesystem::path& root_dir
     }
 
     m_model = utils::singleton_core().read_model(root_dir / "openvino_model.xml");
+    reshape_attentive_eraser_unet_model(
+        m_model, m_config.sample_size, m_vae_scale_factor, m_config.cross_attention_dim);
+    m_model = prepare_attentive_eraser_unet_model(m_model);
     compile(device, properties_without_blob);
 }
 
@@ -57,6 +65,9 @@ UNet2DConditionModel::UNet2DConditionModel(const std::string& model,
                                            const size_t vae_scale_factor) :
     m_config(config), m_vae_scale_factor(vae_scale_factor) {
     m_model = utils::singleton_core().read_model(model, weights);
+    reshape_attentive_eraser_unet_model(
+        m_model, m_config.sample_size, m_vae_scale_factor, m_config.cross_attention_dim);
+    m_model = prepare_attentive_eraser_unet_model(m_model);
 }
 
 UNet2DConditionModel::UNet2DConditionModel(const std::string& model,

@@ -25,6 +25,7 @@ public:
     struct OPENVINO_GENAI_EXPORTS Config {
         size_t in_channels = 4;
         size_t sample_size = 0;
+        size_t cross_attention_dim = 0;
         int time_cond_proj_dim = -1;
 
         explicit Config(const std::filesystem::path& config_path);
