@@ -101,11 +101,6 @@ public:
         m_scheduler = casted;
     }
 
-    virtual void set_attentive_eraser_mode(bool enable) {
-        // Default: no-op for pipelines that don't support attentive eraser mode
-        // Subclasses override if they support it
-    }
-
     virtual void reshape(const int num_images_per_prompt, const int height, const int width, const float guidance_scale) = 0;
 
     virtual std::shared_ptr<DiffusionPipeline> clone() = 0;
