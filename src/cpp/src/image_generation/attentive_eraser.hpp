@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "openvino/core/model.hpp"
+#include "openvino/genai/image_generation/generation_config.hpp"
 #include "openvino/genai/image_generation/scheduler.hpp"
 #include "openvino/runtime/tensor.hpp"
 
@@ -32,6 +33,8 @@ void reshape_attentive_eraser_unet_model(const std::shared_ptr<ov::Model>& model
 std::shared_ptr<Scheduler> create_attentive_eraser_scheduler(
     const std::filesystem::path& scheduler_config_path,
     bool attentive_eraser_enabled);
+
+void apply_attentive_eraser_defaults(ImageGenerationConfig& generation_config);
 
 namespace attentive_eraser {
 

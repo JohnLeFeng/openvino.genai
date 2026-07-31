@@ -498,9 +498,7 @@ protected:
                         "Attentive Eraser mode is available for inpainting pipelines only");
         OPENVINO_ASSERT(std::dynamic_pointer_cast<DDIMScheduler>(m_scheduler),
                         "Attentive Eraser mode requires a DDIM scheduler");
-        m_generation_config.guidance_scale = 1.0f;
-        m_generation_config.num_images_per_prompt = 1;
-        m_generation_config.attentive_eraser = AttentiveEraserConfig{};
+        apply_attentive_eraser_defaults(m_generation_config);
     }
 
     ov::Tensor generate_attentive_eraser(const std::string& positive_prompt,
