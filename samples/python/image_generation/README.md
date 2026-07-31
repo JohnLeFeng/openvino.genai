@@ -11,6 +11,7 @@ There are several sample files:
  - [`encrypted_stable_diffusion.py`](./encrypted_stable_diffusion.py) demonstrates how to use the text to image pipeline with encrypted models and cache encryption callbacks
  - [`image2image.py`](./image2image.py) demonstrates basic usage of the image to image pipeline
  - [`inpainting.py`](./inpainting.py) demonstrates basic usage of the inpainting pipeline
+ - [`attentive_eraser_pipeline.py`](./attentive_eraser_pipeline.py) demonstrates object removal with Attentive Eraser mode through the inpainting pipeline
  - [`benchmark_image_gen.py`](./benchmark_image_gen.py) demonstrates how to benchmark the text to image / image to image / inpainting pipeline
  - [`stable_diffusion_export_import.py`](./stable_diffusion_export_import.py) demonstrates how to export and import compiled models in the text to image pipeline. Only the Stable Diffusion XL model is supported.
 
@@ -260,6 +261,22 @@ The resulting image is:
    ![](./../../cpp/image_generation/inpainting.bmp)
 
 Note, that LoRA, heterogeneous execution and other features of `Text2ImagePipeline` are applicable for `InpaintingPipeline`.
+
+## Run Attentive Eraser through the inpainting pipeline
+
+The `attentive_eraser_pipeline.py` sample enables `InpaintingMode.ATTENTIVE_ERASER` when constructing `InpaintingPipeline`. The same sample supports attentive SD1.5, SD2, and SDXL model directories.
+
+```sh
+python attentive_eraser_pipeline.py <MODEL_DIR> <IMAGE> <MASK_IMAGE> [DEVICE] [SEED]
+```
+
+For example:
+
+```sh
+python attentive_eraser_pipeline.py ./sd15_atten_eraser_ov source_image.png mask.png GPU 123
+```
+
+The positive prompt is intentionally empty for object removal. The sample keeps `strength`, removal guidance scale, self-attention suppression steps, and inference steps visible in the generation config so they can be edited without expanding the CLI. `strength` defaults to `1.0` so SD1.5, SD2, and SDXL all execute the requested 50 denoising steps. The generated image is saved as `object_removed_image.bmp`.
 
 ## benchmarking sample for image generation pipelines
 
