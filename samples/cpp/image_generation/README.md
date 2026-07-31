@@ -253,6 +253,8 @@ Note, that LoRA, heterogeneous execution and other features of `Text2ImagePipeli
 
 The `attentive_eraser_pipeline.cpp` sample uses the same `InpaintingPipeline` interface with `InpaintingMode::ATTENTIVE_ERASER`. The model family is detected from the exported model, so the same executable supports SD1.5, SD2, and SDXL attentive models.
 
+The matching Python sample is [`attentive_eraser_pipeline.py`](../../python/image_generation/attentive_eraser_pipeline.py) and uses the same arguments and defaults.
+
 Build the sample:
 
 ```sh
@@ -271,7 +273,7 @@ For example:
 ./attentive_eraser_pipeline ./sd15_atten_eraser_ov source_image.png mask.png GPU 123
 ```
 
-The positive prompt is intentionally empty for object removal. The generated image is saved as `removed_image.bmp`.
+The positive prompt is intentionally empty for object removal. The sample keeps `strength`, removal guidance scale, self-attention suppression steps, and inference steps visible in the generation config so they can be edited without expanding the CLI. `strength` defaults to `1.0` so SD1.5, SD2, and SDXL all execute the requested 50 denoising steps. The generated image is saved as `object_removed_image.bmp`.
 
 ## Benchmarking sample for image generation pipelines
 

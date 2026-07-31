@@ -30,7 +30,11 @@ int32_t main(int32_t argc, char* argv[]) try {
         ov::genai::inpainting_mode(ov::genai::InpaintingMode::ATTENTIVE_ERASER));
 
     ov::genai::ImageGenerationConfig config = pipeline.get_generation_config();
+    config.strength = 1.0f;
+    config.num_inference_steps = 50;
     config.rng_seed = seed;
+    config.attentive_eraser->rm_guidance_scale = 9.0f;
+    config.attentive_eraser->ss_steps = 9;
     pipeline.set_generation_config(config);
 
     const auto generation_start = std::chrono::steady_clock::now();
@@ -42,7 +46,7 @@ int32_t main(int32_t argc, char* argv[]) try {
     const std::chrono::duration<double> generation_duration =
         std::chrono::steady_clock::now() - generation_start;
 
-    imwrite("removed_image.bmp", generated_image, true);
+    imwrite("object_removed_image.bmp", generated_image, true);
     std::cout << "Generation with seed " << seed << " completed in " << generation_duration.count() << " s\n";
 
     return EXIT_SUCCESS;
