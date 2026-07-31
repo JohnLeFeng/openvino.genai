@@ -128,6 +128,13 @@ std::shared_ptr<Scheduler> create_attentive_eraser_scheduler(
                                   attentive_eraser_enabled ? Scheduler::Type::DDIM : Scheduler::Type::AUTO);
 }
 
+void apply_attentive_eraser_defaults(ImageGenerationConfig& generation_config) {
+    generation_config.guidance_scale = 1.0f;
+    generation_config.strength = 1.0f;
+    generation_config.num_images_per_prompt = 1;
+    generation_config.attentive_eraser = AttentiveEraserConfig{};
+}
+
 namespace attentive_eraser {
 
 void validate_input_tensor(const ov::Tensor& tensor,

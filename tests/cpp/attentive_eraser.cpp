@@ -205,4 +205,16 @@ TEST(AttentiveEraserSchedulerTest, ForcesDdimForAttentiveMode) {
     std::filesystem::remove(config_path);
 }
 
+TEST(AttentiveEraserConfigTest, UsesFullDenoisingStrengthForEveryModelFamily) {
+    ov::genai::ImageGenerationConfig config;
+    config.strength = 0.9999f;
+
+    ov::genai::apply_attentive_eraser_defaults(config);
+
+    EXPECT_FLOAT_EQ(config.strength, 1.0f);
+    EXPECT_FLOAT_EQ(config.guidance_scale, 1.0f);
+    EXPECT_EQ(config.num_images_per_prompt, 1);
+    EXPECT_TRUE(config.attentive_eraser.has_value());
+}
+
 }  // namespace
