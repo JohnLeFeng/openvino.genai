@@ -1,7 +1,8 @@
 // Copyright (C) 2023-2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-#include "image_generation/attentive_eraser.hpp"
+#include "image_generation/image_processor.hpp"
+#include "image_generation/stable_diffusion_pipeline.hpp"
 
 #include <gtest/gtest.h>
 
@@ -17,6 +18,12 @@
 #include "openvino/op/result.hpp"
 
 namespace {
+
+class AttentiveEraserPipelineTestAccessor : public ov::genai::StableDiffusionPipeline {
+public:
+    using StableDiffusionPipeline::apply_attentive_removal_guidance;
+    using StableDiffusionPipeline::blend_attentive_latents;
+};
 
 std::shared_ptr<ov::Model> make_unet(const std::vector<std::string>& input_names,
                                      ov::element::Type element_type = ov::element::f32) {
@@ -67,37 +74,23 @@ const std::vector<std::string> sdxl_attentive_inputs{"sample",
                                                      "ss_steps"};
 
 TEST(AttentiveEraserContractTest, AcceptsMatchingAttentiveGraphs) {
-    EXPECT_NO_THROW(
-        ov::genai::validate_attentive_eraser_unet_inputs(make_unet(sd_attentive_inputs),
-                                                         ov::genai::AttentiveEraserModelFamily::STABLE_DIFFUSION,
-                                                         true));
-    EXPECT_NO_THROW(
-        ov::genai::validate_attentive_eraser_unet_inputs(make_unet(sdxl_attentive_inputs),
-                                                         ov::genai::AttentiveEraserModelFamily::STABLE_DIFFUSION_XL,
-                                                         true));
+    EXPECT_NO_THROW(ov::genai::validate_attentive_eraser_unet_inputs(make_unet(sd_attentive_inputs), true));
+    EXPECT_NO_THROW(ov::genai::validate_attentive_eraser_unet_inputs(make_unet(sdxl_attentive_inputs), true));
 }
 
 TEST(AttentiveEraserContractTest, RejectsModeAndGraphMismatch) {
     const std::vector<std::string> standard_inputs{"sample", "timestep", "encoder_hidden_states"};
 
-    EXPECT_THROW(
-        ov::genai::validate_attentive_eraser_unet_inputs(make_unet(standard_inputs),
-                                                         ov::genai::AttentiveEraserModelFamily::STABLE_DIFFUSION,
-                                                         true),
-        ov::Exception);
-    EXPECT_THROW(
-        ov::genai::validate_attentive_eraser_unet_inputs(make_unet(sd_attentive_inputs),
-                                                         ov::genai::AttentiveEraserModelFamily::STABLE_DIFFUSION,
-                                                         false),
-        ov::Exception);
+    EXPECT_THROW(ov::genai::validate_attentive_eraser_unet_inputs(make_unet(standard_inputs), true), ov::Exception);
+    EXPECT_THROW(ov::genai::validate_attentive_eraser_unet_inputs(make_unet(sd_attentive_inputs), false),
+                 ov::Exception);
 }
 
-TEST(AttentiveEraserContractTest, RejectsWrongModelFamilyContract) {
-    EXPECT_THROW(
-        ov::genai::validate_attentive_eraser_unet_inputs(make_unet(sd_attentive_inputs),
-                                                         ov::genai::AttentiveEraserModelFamily::STABLE_DIFFUSION_XL,
-                                                         true),
-        ov::Exception);
+TEST(AttentiveEraserContractTest, RejectsIncompleteAttentiveContract) {
+    std::vector<std::string> incomplete_inputs = sd_attentive_inputs;
+    incomplete_inputs.pop_back();
+
+    EXPECT_THROW(ov::genai::validate_attentive_eraser_unet_inputs(make_unet(incomplete_inputs), true), ov::Exception);
 }
 
 TEST(AttentiveEraserContractTest, ExposesFloatingPointInputsAndOutputAsF32) {
@@ -121,46 +114,22 @@ TEST(AttentiveEraserContractTest, ReshapesSdGraphToFixedContract) {
     EXPECT_EQ(model->input("mask").get_partial_shape(), ov::PartialShape({1, 1, 512, 512}));
 }
 
-TEST(AttentiveEraserTensorTest, PreprocessesImageFromNhwcU8ToNchwF32) {
-    const std::array<uint8_t, 6> pixels{0, 127, 255, 255, 127, 0};
-    ov::Tensor image(ov::element::u8, {1, 1, 2, 3}, const_cast<uint8_t*>(pixels.data()));
-
-    ov::Tensor processed = ov::genai::attentive_eraser::preprocess_image(image);
-
-    EXPECT_EQ(processed.get_shape(), ov::Shape({1, 3, 1, 2}));
-    EXPECT_FLOAT_EQ(processed.data<const float>()[0], -1.0f);
-    EXPECT_FLOAT_EQ(processed.data<const float>()[1], 1.0f);
-    EXPECT_FLOAT_EQ(processed.data<const float>()[4], 1.0f);
-    EXPECT_FLOAT_EQ(processed.data<const float>()[5], -1.0f);
-}
-
 TEST(AttentiveEraserTensorTest, ConvertsRgbMaskToGrayBeforeBinarizing) {
     const std::array<uint8_t, 12> pixels{255, 255, 255, 0, 0, 0, 255, 255, 255, 0, 0, 0};
     ov::Tensor mask(ov::element::u8, {1, 2, 2, 3}, const_cast<uint8_t*>(pixels.data()));
 
-    ov::Tensor processed = ov::genai::attentive_eraser::preprocess_mask(mask, 1, 0.1f);
+    ov::Tensor processed = ov::genai::preprocess_attentive_mask(mask, 1, 0.1f);
 
     ASSERT_EQ(processed.get_shape(), ov::Shape({1, 1, 2, 2}));
     EXPECT_FLOAT_EQ(processed.data<const float>()[0], 1.0f);
     EXPECT_FLOAT_EQ(processed.data<const float>()[1], 0.0f);
 }
 
-TEST(AttentiveEraserTensorTest, ValidatesFixedInputContract) {
-    ov::Tensor image(ov::element::u8, {1, 8, 8, 3});
-    ov::Tensor mask(ov::element::u8, {1, 8, 8, 1});
-    EXPECT_NO_THROW(ov::genai::attentive_eraser::validate_input_tensor(image, "Initial image", false, 8));
-    EXPECT_NO_THROW(ov::genai::attentive_eraser::validate_input_tensor(mask, "Mask image", true, 8));
-
-    ov::Tensor wrong_size(ov::element::u8, {1, 4, 8, 3});
-    EXPECT_THROW(ov::genai::attentive_eraser::validate_input_tensor(wrong_size, "Initial image", false, 8),
-                 ov::Exception);
-}
-
 TEST(AttentiveEraserTensorTest, AppliesRemovalGuidance) {
     const std::array<float, 4> noise_values{1.0f, 2.0f, 3.0f, 6.0f};
     ov::Tensor noise_pair(ov::element::f32, {2, 1, 1, 2}, const_cast<float*>(noise_values.data()));
 
-    ov::Tensor guided = ov::genai::attentive_eraser::removal_guidance(noise_pair, 2.0f);
+    ov::Tensor guided = AttentiveEraserPipelineTestAccessor::apply_attentive_removal_guidance(noise_pair, 2.0f);
 
     EXPECT_EQ(guided.get_shape(), ov::Shape({1, 1, 1, 2}));
     EXPECT_FLOAT_EQ(guided.data<const float>()[0], 5.0f);
@@ -175,7 +144,7 @@ TEST(AttentiveEraserTensorTest, BlendsLatentsUsingMask) {
     ov::Tensor mask(ov::element::f32, {1, 1, 1, 2}, const_cast<float*>(mask_values.data()));
     ov::Tensor latents(ov::element::f32, {1, 1, 1, 2}, latent_values.data());
 
-    ov::genai::attentive_eraser::blend_latents(initial, mask, latents);
+    AttentiveEraserPipelineTestAccessor::blend_attentive_latents(initial, mask, latents);
 
     EXPECT_FLOAT_EQ(latents.data<const float>()[0], 2.0f);
     EXPECT_FLOAT_EQ(latents.data<const float>()[1], 20.0f);
@@ -215,6 +184,18 @@ TEST(AttentiveEraserConfigTest, UsesFullDenoisingStrengthForEveryModelFamily) {
     EXPECT_FLOAT_EQ(config.guidance_scale, 1.0f);
     EXPECT_EQ(config.num_images_per_prompt, 1);
     EXPECT_TRUE(config.attentive_eraser.has_value());
+}
+
+TEST(AttentiveEraserConfigTest, ValidatesMaskBlurKernelOverride) {
+    ov::genai::AttentiveEraserConfig config;
+    EXPECT_EQ(config.mask_blur_kernel, 0);
+    EXPECT_NO_THROW(config.validate());
+
+    config.mask_blur_kernel = 9;
+    EXPECT_NO_THROW(config.validate());
+
+    config.mask_blur_kernel = 8;
+    EXPECT_THROW(config.validate(), ov::Exception);
 }
 
 }  // namespace

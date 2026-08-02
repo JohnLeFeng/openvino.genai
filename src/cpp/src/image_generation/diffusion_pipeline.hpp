@@ -12,6 +12,7 @@
 #include "image_generation/numpy_utils.hpp"
 #include "image_generation/image_processor.hpp"
 
+#include "openvino/core/model.hpp"
 #include "openvino/genai/image_generation/generation_config.hpp"
 #include "openvino/genai/image_generation/image_generation_perf_metrics.hpp"
 #include "openvino/genai/image_generation/autoencoder_kl.hpp"
@@ -59,6 +60,30 @@ ov::Tensor get_guidance_scale_embedding(float guidance_scale, uint32_t embedding
 
 namespace ov {
 namespace genai {
+
+void validate_attentive_eraser_unet_inputs(const std::shared_ptr<ov::Model>& model,
+                                           bool attentive_eraser_enabled);
+
+std::shared_ptr<ov::Model> prepare_attentive_eraser_unet_model(std::shared_ptr<ov::Model> model);
+
+void reshape_attentive_eraser_unet_model(const std::shared_ptr<ov::Model>& model,
+                                         size_t sample_size,
+                                         size_t vae_scale_factor,
+                                         size_t cross_attention_dim);
+
+inline std::shared_ptr<Scheduler> create_attentive_eraser_scheduler(
+    const std::filesystem::path& scheduler_config_path,
+    bool attentive_eraser_enabled) {
+    return Scheduler::from_config(scheduler_config_path,
+                                  attentive_eraser_enabled ? Scheduler::Type::DDIM : Scheduler::Type::AUTO);
+}
+
+inline void apply_attentive_eraser_defaults(ImageGenerationConfig& generation_config) {
+    generation_config.guidance_scale = 1.0f;
+    generation_config.strength = 1.0f;
+    generation_config.num_images_per_prompt = 1;
+    generation_config.attentive_eraser = AttentiveEraserConfig{};
+}
 
 enum class PipelineType {
     TEXT_2_IMAGE = 0,

@@ -77,8 +77,10 @@ public:
         OPENVINO_ASSERT(m_native_batch_size && m_native_batch_size == m_requests.size(),
                         "UNet model must be compiled first");
 
-        size_t encoder_hidden_states_bs = encoder_hidden_states.get_shape()[0];
-        if (m_is_blob && encoder_hidden_states_bs != m_native_batch_size) {
+        const ov::Shape& shape = encoder_hidden_states.get_shape();
+        const bool broadcast = shape.empty() || shape[0] == 1;
+        const size_t encoder_hidden_states_bs = shape.empty() ? 1 : shape[0];
+        if (m_is_blob && !broadcast && encoder_hidden_states_bs != m_native_batch_size) {
             GENAI_WARN("UNet model was imported from blob. "
                        "The batch size of encoder hidden states does not match the batch size of native, therefore, "
                        "update native batch size to align batch size of encoder hidden states.");
@@ -101,13 +103,13 @@ public:
         }
 
         OPENVINO_ASSERT(
-            encoder_hidden_states_bs == m_native_batch_size,
+            broadcast || encoder_hidden_states_bs == m_native_batch_size,
             ("UNetInferenceStaticBS1::set_hidden_states: native batch size is "
             + std::to_string(m_native_batch_size) +
              ", but encoder_hidden_states has batch size of " + std::to_string(encoder_hidden_states_bs)));
 
-        char* pHiddenStates = (char *)encoder_hidden_states.data();
-        size_t hidden_states_batch_stride_bytes = encoder_hidden_states.get_strides()[0];
+        char* pHiddenStates = static_cast<char*>(encoder_hidden_states.data());
+        const size_t hidden_states_batch_stride_bytes = shape.empty() ? 0 : encoder_hidden_states.get_strides()[0];
 
         for (size_t i = 0; i < m_native_batch_size; i++)
         {
@@ -123,7 +125,9 @@ public:
             bs1_wrapper.copy_to(hidden_states_bs1);
 
             // increment pHiddenStates to start location of next batch (using stride)
-            pHiddenStates += hidden_states_batch_stride_bytes;
+            if (!broadcast) {
+                pHiddenStates += hidden_states_batch_stride_bytes;
+            }
         }
     }
 

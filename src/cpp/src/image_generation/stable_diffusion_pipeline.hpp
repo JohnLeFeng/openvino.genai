@@ -9,7 +9,6 @@
 #include <filesystem>
 
 #include "image_generation/diffusion_pipeline.hpp"
-#include "image_generation/attentive_eraser.hpp"
 #include "image_generation/threaded_callback.hpp"
 
 #include "openvino/genai/image_generation/clip_text_model.hpp"
@@ -57,9 +56,7 @@ public:
         const std::string unet = data["unet"][1].get<std::string>();
         if (unet == "UNet2DConditionModel") {
             auto unet_model = utils::singleton_core().read_model(root_dir / "unet" / "openvino_model.xml");
-            validate_attentive_eraser_unet_inputs(unet_model,
-                                                   AttentiveEraserModelFamily::STABLE_DIFFUSION,
-                                                   m_use_attentive_eraser);
+            validate_attentive_eraser_unet_inputs(unet_model, m_use_attentive_eraser);
             m_unet = std::make_shared<UNet2DConditionModel>(root_dir / "unet");
         } else {
             OPENVINO_THROW("Unsupported '", unet, "' UNet type");
@@ -113,9 +110,7 @@ public:
         const std::string unet = data["unet"][1].get<std::string>();
         if (unet == "UNet2DConditionModel") {
             auto unet_model = utils::singleton_core().read_model(root_dir / "unet" / "openvino_model.xml");
-            validate_attentive_eraser_unet_inputs(unet_model,
-                                                   AttentiveEraserModelFamily::STABLE_DIFFUSION,
-                                                   m_use_attentive_eraser);
+            validate_attentive_eraser_unet_inputs(unet_model, m_use_attentive_eraser);
             m_unet = std::make_shared<UNet2DConditionModel>(root_dir / "unet", device, *updated_properties);
         } else {
             OPENVINO_THROW("Unsupported '", unet, "' UNet type");
@@ -332,14 +327,27 @@ public:
         ImageGenerationConfig generation_config = m_generation_config;
         generation_config.update_generation_config(properties);
 
-        // Handle attentive eraser mode
-        if (m_use_attentive_eraser && m_pipeline_type == PipelineType::INPAINTING) {
-            return generate_attentive_eraser(positive_prompt,
-                                              std::move(initial_image),
-                                              std::move(mask_image),
-                                              properties,
-                                              generation_config,
-                                              gen_start);
+        const bool is_attentive = m_use_attentive_eraser && m_pipeline_type == PipelineType::INPAINTING;
+
+        if (is_attentive) {
+            OPENVINO_ASSERT(generation_config.attentive_eraser.has_value(),
+                            "ImageGenerationConfig.attentive_eraser must be set in attentive eraser mode");
+            OPENVINO_ASSERT(generation_config.guidance_scale == 1.0f,
+                            "Attentive eraser mode requires guidance_scale == 1.0");
+            OPENVINO_ASSERT(generation_config.negative_prompt == std::nullopt &&
+                                generation_config.negative_prompt_2 == std::nullopt &&
+                                generation_config.negative_prompt_3 == std::nullopt,
+                            "Attentive eraser mode does not support negative prompts");
+            OPENVINO_ASSERT(generation_config.strength > 0.0f && generation_config.strength <= 1.0f,
+                            "Attentive eraser strength must be in (0, 1]");
+            OPENVINO_ASSERT(generation_config.num_inference_steps > 0,
+                            "Attentive eraser num_inference_steps must be positive");
+            OPENVINO_ASSERT(generation_config.num_images_per_prompt == 1,
+                            "Attentive eraser mode supports num_images_per_prompt == 1 only");
+            OPENVINO_ASSERT(!generation_config.adapters.has_value(),
+                            "Attentive eraser mode does not support LoRA adapters");
+            OPENVINO_ASSERT(std::dynamic_pointer_cast<DDIMScheduler>(m_scheduler),
+                            "Attentive Eraser mode requires a DDIM scheduler");
         }
 
         // Stable Diffusion pipeline
@@ -354,9 +362,16 @@ public:
         if (generation_config.width < 0)
             compute_dim(generation_config.width, initial_image, 2 /* assume NHWC */);
 
-        check_inputs(generation_config, initial_image);
-
-        set_lora_adapters(generation_config.adapters);
+        if (is_attentive) {
+            const int64_t model_image_size = static_cast<int64_t>(unet_config.sample_size * vae_scale_factor);
+            OPENVINO_ASSERT(generation_config.height == model_image_size &&
+                                generation_config.width == model_image_size,
+                            "Attentive eraser height and width must match the UNet image size of ",
+                            model_image_size);
+        } else {
+            check_inputs(generation_config, initial_image);
+            set_lora_adapters(generation_config.adapters);
+        }
 
         // use callback if defined
         std::shared_ptr<ThreadedCallbackWrapper> callback_ptr = nullptr;
@@ -370,16 +385,35 @@ public:
         std::vector<std::int64_t> timesteps = m_scheduler->get_timesteps();
 
         // compute text encoders and set hidden states
-        compute_hidden_states(positive_prompt, generation_config);
+        if (is_attentive) {
+            compute_attentive_eraser_hidden_states(positive_prompt, generation_config);
+        } else {
+            compute_hidden_states(positive_prompt, generation_config);
+        }
 
         // preparate initial / image latents
         ov::Tensor latent, processed_image, image_latent, noise;
         std::tie(latent, processed_image, image_latent, noise) = prepare_latents(initial_image, generation_config);
 
         // prepare mask latents
-        ov::Tensor mask, masked_image_latent;
+        ov::Tensor mask, masked_image_latent, latent_mask;
         if (m_pipeline_type == PipelineType::INPAINTING) {
-            std::tie(mask, masked_image_latent) = prepare_mask_latents(mask_image, processed_image, generation_config, batch_size_multiplier);
+            if (is_attentive) {
+                ov::Tensor resized_mask = m_image_resizer->execute(mask_image,
+                    generation_config.height, generation_config.width);
+                const size_t configured_kernel = generation_config.attentive_eraser->mask_blur_kernel;
+                ov::Tensor full_resolution_mask = preprocess_attentive_mask(
+                    resized_mask,
+                    configured_kernel == 0 ? attentive_eraser_mask_blur_kernel() : configured_kernel,
+                    0.1f);
+                latent_mask = max_pool_mask(full_resolution_mask, vae_scale_factor);
+                m_unet->set_hidden_states("mask", full_resolution_mask);
+                // start from noised image latent instead of pure noise
+                image_latent.copy_to(latent);
+                m_scheduler->add_noise(latent, noise, timesteps.front());
+            } else {
+                std::tie(mask, masked_image_latent) = prepare_mask_latents(mask_image, processed_image, generation_config, batch_size_multiplier);
+            }
         }
 
         // prepare latents passed to models taking into account guidance scale (batch size multiplier)
@@ -390,45 +424,71 @@ public:
 
         for (size_t inference_step = 0; inference_step < timesteps.size(); inference_step++) {
             auto step_start = std::chrono::steady_clock::now();
-            numpy_utils::batch_copy(latent, latent_cfg, 0, 0, generation_config.num_images_per_prompt);
-            // concat the same latent twice along a batch dimension in case of CFG
-            if (batch_size_multiplier > 1) {
-                numpy_utils::batch_copy(latent, latent_cfg, 0, generation_config.num_images_per_prompt, generation_config.num_images_per_prompt);
-            }
 
-            m_scheduler->scale_model_input(latent_cfg, inference_step);
+            ov::Tensor noise_pred_tensor;
+            if (is_attentive) {
+                ov::Tensor current_step(ov::element::i64, {});
+                *current_step.data<int64_t>() = static_cast<int64_t>(inference_step);
+                ov::Tensor ss_steps_tensor(ov::element::i64, {});
+                *ss_steps_tensor.data<int64_t>() = static_cast<int64_t>(generation_config.attentive_eraser->ss_steps);
+                m_unet->set_hidden_states("cur_step", current_step);
+                m_unet->set_hidden_states("ss_steps", ss_steps_tensor);
 
-            ov::Tensor latent_model_input = is_inpainting_model() ? numpy_utils::concat(numpy_utils::concat(latent_cfg, mask, 1), masked_image_latent, 1) : latent_cfg;
-            ov::Tensor timestep(ov::element::i64, {1}, &timesteps[inference_step]);
-            auto infer_start = std::chrono::steady_clock::now();
-            ov::Tensor noise_pred_tensor = m_unet->infer(latent_model_input, timestep);
-            auto infer_duration = ov::genai::PerfMetrics::get_microsec(std::chrono::steady_clock::now() - infer_start);
-            m_perf_metrics.raw_metrics.unet_inference_durations.emplace_back(MicroSeconds(infer_duration));
+                ov::Tensor latent_pair = numpy_utils::repeat(latent, 2);
+                ov::Tensor timestep(ov::element::i64, {});
+                *timestep.data<int64_t>() = timesteps[inference_step];
+                auto infer_start = std::chrono::steady_clock::now();
+                ov::Tensor noise_pair = m_unet->infer(latent_pair, timestep);
+                m_perf_metrics.raw_metrics.unet_inference_durations.emplace_back(
+                    std::chrono::duration_cast<MicroSeconds>(std::chrono::steady_clock::now() - infer_start));
 
-            ov::Shape noise_pred_shape = noise_pred_tensor.get_shape();
-            noise_pred_shape[0] /= batch_size_multiplier;
-
-            if (batch_size_multiplier > 1) {
-                noisy_residual_tensor.set_shape(noise_pred_shape);
-
-                // perform guidance
-                float* noisy_residual = noisy_residual_tensor.data<float>();
-                const float* noise_pred_uncond = noise_pred_tensor.data<const float>();
-                const float* noise_pred_text = noise_pred_uncond + noisy_residual_tensor.get_size();
-
-                for (size_t i = 0; i < noisy_residual_tensor.get_size(); ++i) {
-                    noisy_residual[i] = noise_pred_uncond[i] +
-                        generation_config.guidance_scale * (noise_pred_text[i] - noise_pred_uncond[i]);
-                }
+                noisy_residual_tensor = apply_attentive_removal_guidance(
+                    noise_pair, generation_config.attentive_eraser->rm_guidance_scale);
             } else {
-                noisy_residual_tensor = noise_pred_tensor;
+                numpy_utils::batch_copy(latent, latent_cfg, 0, 0, generation_config.num_images_per_prompt);
+                if (batch_size_multiplier > 1) {
+                    numpy_utils::batch_copy(latent, latent_cfg, 0, generation_config.num_images_per_prompt, generation_config.num_images_per_prompt);
+                }
+
+                m_scheduler->scale_model_input(latent_cfg, inference_step);
+
+                ov::Tensor latent_model_input = is_inpainting_model() ? numpy_utils::concat(numpy_utils::concat(latent_cfg, mask, 1), masked_image_latent, 1) : latent_cfg;
+                ov::Tensor timestep(ov::element::i64, {1}, &timesteps[inference_step]);
+                auto infer_start = std::chrono::steady_clock::now();
+                noise_pred_tensor = m_unet->infer(latent_model_input, timestep);
+                auto infer_duration = ov::genai::PerfMetrics::get_microsec(std::chrono::steady_clock::now() - infer_start);
+                m_perf_metrics.raw_metrics.unet_inference_durations.emplace_back(MicroSeconds(infer_duration));
+
+                ov::Shape noise_pred_shape = noise_pred_tensor.get_shape();
+                noise_pred_shape[0] /= batch_size_multiplier;
+
+                if (batch_size_multiplier > 1) {
+                    noisy_residual_tensor.set_shape(noise_pred_shape);
+
+                    float* noisy_residual = noisy_residual_tensor.data<float>();
+                    const float* noise_pred_uncond = noise_pred_tensor.data<const float>();
+                    const float* noise_pred_text = noise_pred_uncond + noisy_residual_tensor.get_size();
+
+                    for (size_t i = 0; i < noisy_residual_tensor.get_size(); ++i) {
+                        noisy_residual[i] = noise_pred_uncond[i] +
+                            generation_config.guidance_scale * (noise_pred_text[i] - noise_pred_uncond[i]);
+                    }
+                } else {
+                    noisy_residual_tensor = noise_pred_tensor;
+                }
             }
 
             auto scheduler_step_result = m_scheduler->step(noisy_residual_tensor, latent, inference_step, generation_config.generator);
             latent = scheduler_step_result["latent"];
 
-            // in case of non-specialized inpainting model, we need manually mask current denoised latent and initial image latent
-            if (m_pipeline_type == PipelineType::INPAINTING && !is_inpainting_model()) {
+            if (is_attentive) {
+                ov::Tensor initial_noised(image_latent.get_element_type(), image_latent.get_shape());
+                image_latent.copy_to(initial_noised);
+                if (inference_step + 1 < timesteps.size()) {
+                    m_scheduler->add_noise(initial_noised, noise, timesteps[inference_step + 1]);
+                }
+                blend_attentive_latents(initial_noised, latent_mask, latent);
+            } else if (m_pipeline_type == PipelineType::INPAINTING && !is_inpainting_model()) {
                 blend_latents(image_latent, noise, mask, latent, inference_step);
             }
 
@@ -474,17 +534,67 @@ public:
     }
 
 protected:
-    virtual size_t attentive_eraser_image_size() const {
-        return 512;
+    static ov::Tensor apply_attentive_removal_guidance(const ov::Tensor& noise_pair, float scale) {
+        OPENVINO_ASSERT(noise_pair.get_element_type() == ov::element::f32 &&
+                            noise_pair.get_shape().size() == 4,
+                        "Noise prediction must be a rank-4 f32 tensor");
+        const ov::Shape shape = noise_pair.get_shape();
+        OPENVINO_ASSERT(shape[0] == 2,
+                        "Noise prediction must contain the without-mask and with-mask batches");
+        OPENVINO_ASSERT(scale > 0.0f, "Removal guidance scale must be positive");
+
+        ov::Shape output_shape = shape;
+        output_shape[0] = 1;
+        ov::Tensor result(ov::element::f32, output_shape);
+        const float* without_mask = noise_pair.data<const float>();
+        const float* with_mask = without_mask + result.get_size();
+        float* destination = result.data<float>();
+        for (size_t index = 0; index < result.get_size(); ++index) {
+            destination[index] = without_mask[index] + scale * (with_mask[index] - without_mask[index]);
+        }
+        return result;
+    }
+
+    static void blend_attentive_latents(const ov::Tensor& initial_noised,
+                                        const ov::Tensor& mask,
+                                        ov::Tensor latents) {
+        OPENVINO_ASSERT(initial_noised.get_element_type() == ov::element::f32 &&
+                            mask.get_element_type() == ov::element::f32 &&
+                            latents.get_element_type() == ov::element::f32,
+                        "Attentive latent blending requires f32 tensors");
+        OPENVINO_ASSERT(initial_noised.get_shape() == latents.get_shape(),
+                        "Initial noised latent and latent shapes must match");
+        const ov::Shape latent_shape = latents.get_shape();
+        const ov::Shape mask_shape = mask.get_shape();
+        OPENVINO_ASSERT(latent_shape.size() == 4 && mask_shape.size() == 4 &&
+                            mask_shape[0] == latent_shape[0] && mask_shape[1] == 1 &&
+                            mask_shape[2] == latent_shape[2] && mask_shape[3] == latent_shape[3],
+                        "Latent mask must have shape [batch, 1, height, width]");
+
+        const float* initial_data = initial_noised.data<const float>();
+        const float* mask_data = mask.data<const float>();
+        float* latent_data = latents.data<float>();
+        const size_t spatial_size = latent_shape[2] * latent_shape[3];
+        for (size_t batch = 0; batch < latent_shape[0]; ++batch) {
+            for (size_t channel = 0; channel < latent_shape[1]; ++channel) {
+                for (size_t spatial = 0; spatial < spatial_size; ++spatial) {
+                    const size_t latent_index = (batch * latent_shape[1] + channel) * spatial_size + spatial;
+                    const float mask_value = mask_data[batch * spatial_size + spatial];
+                    latent_data[latent_index] = (1.0f - mask_value) * initial_data[latent_index] +
+                                                mask_value * latent_data[latent_index];
+                }
+            }
+        }
     }
 
     virtual size_t attentive_eraser_mask_blur_kernel() const {
         return 7;
     }
 
-    virtual void compute_attentive_eraser_hidden_states() {
+    virtual void compute_attentive_eraser_hidden_states(const std::string& positive_prompt,
+                                                         const ImageGenerationConfig& generation_config) {
         const auto infer_start = std::chrono::steady_clock::now();
-        ov::Tensor hidden_states = m_clip_text_encoder->infer("", "", false);
+        ov::Tensor hidden_states = m_clip_text_encoder->infer(positive_prompt, "", false);
         m_perf_metrics.encoder_inference_duration["text_encoder"] =
             std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - infer_start).count();
         m_unet->set_hidden_states("encoder_hidden_states", numpy_utils::repeat(hidden_states, 2));
@@ -499,121 +609,6 @@ protected:
         OPENVINO_ASSERT(std::dynamic_pointer_cast<DDIMScheduler>(m_scheduler),
                         "Attentive Eraser mode requires a DDIM scheduler");
         apply_attentive_eraser_defaults(m_generation_config);
-    }
-
-    ov::Tensor generate_attentive_eraser(const std::string& positive_prompt,
-                                          ov::Tensor initial_image,
-                                          ov::Tensor mask_image,
-                                          const ov::AnyMap& properties,
-                                          ImageGenerationConfig& generation_config,
-                                          std::chrono::steady_clock::time_point gen_start) {
-        OPENVINO_ASSERT(positive_prompt.empty(), "Attentive eraser mode requires an empty positive prompt");
-        OPENVINO_ASSERT(generation_config.attentive_eraser.has_value(),
-                        "ImageGenerationConfig.attentive_eraser must be set in attentive eraser mode");
-        OPENVINO_ASSERT(generation_config.guidance_scale == 1.0f,
-                        "Attentive eraser mode requires guidance_scale == 1.0");
-        OPENVINO_ASSERT(generation_config.negative_prompt == std::nullopt &&
-                            generation_config.negative_prompt_2 == std::nullopt &&
-                            generation_config.negative_prompt_3 == std::nullopt,
-                        "Attentive eraser mode does not support negative prompts");
-        OPENVINO_ASSERT(generation_config.prompt_2 == std::nullopt && generation_config.prompt_3 == std::nullopt,
-                        "Attentive eraser mode does not support additional prompts");
-        OPENVINO_ASSERT(generation_config.strength > 0.0f && generation_config.strength <= 1.0f,
-                        "Attentive eraser strength must be in (0, 1]");
-        OPENVINO_ASSERT(generation_config.num_inference_steps > 0,
-                        "Attentive eraser num_inference_steps must be positive");
-        OPENVINO_ASSERT(generation_config.num_images_per_prompt == 1,
-                        "Attentive eraser mode supports num_images_per_prompt == 1 only");
-        OPENVINO_ASSERT(!generation_config.adapters.has_value(),
-                        "Attentive eraser mode does not support LoRA adapters");
-        OPENVINO_ASSERT(std::dynamic_pointer_cast<DDIMScheduler>(m_scheduler),
-                        "Attentive Eraser mode requires a DDIM scheduler");
-
-        const size_t image_size = attentive_eraser_image_size();
-        attentive_eraser::validate_input_tensor(initial_image, "Initial image", false, image_size);
-        attentive_eraser::validate_input_tensor(mask_image, "Mask image", true, image_size);
-
-        std::shared_ptr<ThreadedCallbackWrapper> callback_ptr;
-        const auto callback_iter = properties.find(ov::genai::callback.name());
-        if (callback_iter != properties.end()) {
-            callback_ptr = std::make_shared<ThreadedCallbackWrapper>(
-                callback_iter->second.as<std::function<bool(size_t, size_t, ov::Tensor&)>>());
-            callback_ptr->start();
-        }
-
-        ov::Tensor processed_image = attentive_eraser::preprocess_image(initial_image);
-        ov::Tensor full_resolution_mask = attentive_eraser::preprocess_mask(
-            mask_image, attentive_eraser_mask_blur_kernel(), 0.1f);
-        ov::Tensor latent_mask = attentive_eraser::max_pool_mask(full_resolution_mask, 8);
-
-        const auto vae_encode_start = std::chrono::steady_clock::now();
-        ov::Tensor image_latent = m_vae->encode(processed_image, generation_config.generator);
-        m_perf_metrics.vae_encoder_inference_duration =
-            std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - vae_encode_start).count();
-        ov::Tensor noise = generation_config.generator->randn_tensor(image_latent.get_shape());
-
-        m_scheduler->set_timesteps(generation_config.num_inference_steps, generation_config.strength);
-        const std::vector<int64_t> timesteps = m_scheduler->get_timesteps();
-        OPENVINO_ASSERT(!timesteps.empty(), "DDIM scheduler produced no timesteps");
-
-        ov::Tensor latent(image_latent.get_element_type(), image_latent.get_shape());
-        image_latent.copy_to(latent);
-        m_scheduler->add_noise(latent, noise, timesteps.front());
-        compute_attentive_eraser_hidden_states();
-        m_unet->set_hidden_states("mask", full_resolution_mask);
-
-        ov::Tensor denoised = latent;
-        for (size_t step = 0; step < timesteps.size(); ++step) {
-            const auto iteration_start = std::chrono::steady_clock::now();
-            ov::Tensor current_step(ov::element::i64, {});
-            *current_step.data<int64_t>() = static_cast<int64_t>(step);
-            ov::Tensor ss_steps(ov::element::i64, {});
-            *ss_steps.data<int64_t>() = static_cast<int64_t>(generation_config.attentive_eraser->ss_steps);
-            m_unet->set_hidden_states("cur_step", current_step);
-            m_unet->set_hidden_states("ss_steps", ss_steps);
-
-            ov::Tensor latent_pair = numpy_utils::repeat(latent, 2);
-            ov::Tensor timestep(ov::element::i64, {});
-            *timestep.data<int64_t>() = timesteps[step];
-            const auto unet_start = std::chrono::steady_clock::now();
-            ov::Tensor noise_pair = m_unet->infer(latent_pair, timestep);
-            m_perf_metrics.raw_metrics.unet_inference_durations.push_back(
-                std::chrono::duration_cast<MicroSeconds>(std::chrono::steady_clock::now() - unet_start));
-            ov::Tensor guided_noise = attentive_eraser::removal_guidance(
-                noise_pair, generation_config.attentive_eraser->rm_guidance_scale);
-            auto scheduler_result = m_scheduler->step(guided_noise, latent, step, generation_config.generator);
-            latent = scheduler_result.at("latent");
-            const auto denoised_iter = scheduler_result.find("denoised");
-            denoised = denoised_iter == scheduler_result.end() ? latent : denoised_iter->second;
-
-            ov::Tensor initial_noised(image_latent.get_element_type(), image_latent.get_shape());
-            image_latent.copy_to(initial_noised);
-            if (step + 1 < timesteps.size()) {
-                m_scheduler->add_noise(initial_noised, noise, timesteps[step + 1]);
-            }
-            attentive_eraser::blend_latents(initial_noised, latent_mask, latent);
-            m_perf_metrics.raw_metrics.iteration_durations.push_back(
-                std::chrono::duration_cast<MicroSeconds>(std::chrono::steady_clock::now() - iteration_start));
-
-            if (callback_ptr && callback_ptr->has_callback() &&
-                callback_ptr->write(step, timesteps.size(), denoised) == CallbackStatus::STOP) {
-                callback_ptr->end();
-                m_perf_metrics.generate_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - gen_start).count();
-                return ov::Tensor(ov::element::u8, {});
-            }
-        }
-        if (callback_ptr) {
-            callback_ptr->end();
-        }
-
-        const auto vae_decode_start = std::chrono::steady_clock::now();
-        ov::Tensor image = decode(denoised);
-        m_perf_metrics.vae_decoder_inference_duration =
-            std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - vae_decode_start).count();
-        m_perf_metrics.generate_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - gen_start).count();
-        return image;
     }
 
     size_t get_config_in_channels() const override {
