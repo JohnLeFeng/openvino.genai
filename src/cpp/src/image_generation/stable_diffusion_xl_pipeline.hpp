@@ -46,9 +46,7 @@ public:
         const std::string unet = data["unet"][1].get<std::string>();
         if (unet == "UNet2DConditionModel") {
             auto unet_model = utils::singleton_core().read_model(root_dir / "unet" / "openvino_model.xml");
-            validate_attentive_eraser_unet_inputs(unet_model,
-                                                   AttentiveEraserModelFamily::STABLE_DIFFUSION_XL,
-                                                   m_use_attentive_eraser);
+            validate_attentive_eraser_unet_inputs(unet_model, m_use_attentive_eraser);
             m_unet = std::make_shared<UNet2DConditionModel>(root_dir / "unet");
         } else {
             OPENVINO_THROW("Unsupported '", unet, "' UNet type");
@@ -133,9 +131,7 @@ public:
         const std::string unet = data["unet"][1].get<std::string>();
         if (unet == "UNet2DConditionModel") {
             auto unet_model = utils::singleton_core().read_model(root_dir / "unet" / "openvino_model.xml");
-            validate_attentive_eraser_unet_inputs(unet_model,
-                                                   AttentiveEraserModelFamily::STABLE_DIFFUSION_XL,
-                                                   m_use_attentive_eraser);
+            validate_attentive_eraser_unet_inputs(unet_model, m_use_attentive_eraser);
             if (blob_path.has_value()) {
                 updated_properties.fork()[ov::genai::blob_path.name()] = blob_path.value() / "unet";
             }
@@ -438,21 +434,19 @@ public:
     }
 
 protected:
-    size_t attentive_eraser_image_size() const override {
-        return 1024;
-    }
-
     size_t attentive_eraser_mask_blur_kernel() const override {
         return 77;
     }
 
-    void compute_attentive_eraser_hidden_states() override {
+    void compute_attentive_eraser_hidden_states(const std::string& positive_prompt,
+                                                 const ImageGenerationConfig& generation_config) override {
+        std::string prompt_2 = generation_config.prompt_2.value_or(positive_prompt);
         auto infer_start = std::chrono::steady_clock::now();
-        ov::Tensor text_embeds = m_clip_text_encoder_with_projection->infer("", "", false);
+        ov::Tensor text_embeds = m_clip_text_encoder_with_projection->infer(positive_prompt, "", false);
         m_perf_metrics.encoder_inference_duration["text_encoder_2"] =
             std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - infer_start).count();
         infer_start = std::chrono::steady_clock::now();
-        m_clip_text_encoder->infer("", "", false);
+        m_clip_text_encoder->infer(prompt_2, "", false);
         m_perf_metrics.encoder_inference_duration["text_encoder"] =
             std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - infer_start).count();
 
@@ -465,8 +459,10 @@ protected:
         m_unet->set_hidden_states("encoder_hidden_states", numpy_utils::repeat(hidden_states, 2));
         m_unet->set_hidden_states("text_embeds", numpy_utils::repeat(text_embeds, 2));
 
+        const float w = static_cast<float>(generation_config.width);
+        const float h = static_cast<float>(generation_config.height);
         ov::Tensor time_ids(ov::element::f32, {2, 6});
-        const std::array<float, 6> values{1024.0f, 1024.0f, 0.0f, 0.0f, 1024.0f, 1024.0f};
+        const std::array<float, 6> values{w, h, 0.0f, 0.0f, w, h};
         std::copy(values.begin(), values.end(), time_ids.data<float>());
         std::copy(values.begin(), values.end(), time_ids.data<float>() + values.size());
         m_unet->set_hidden_states("time_ids", time_ids);
