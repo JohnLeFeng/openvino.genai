@@ -1,7 +1,7 @@
 // Copyright (C) 2023-2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-// #include <openvino/runtime/core.hpp>
+#include <openvino/runtime/core.hpp>
 #include "openvino/genai/image_generation/text2image_pipeline.hpp"
 
 #include "imwrite.hpp"
@@ -52,10 +52,14 @@ ov::genai::Text2ImagePipeline blob_import(const std::filesystem::path& root_dir,
     const auto blob_path = root_dir / blob_folder_name;
     const auto unet_blob_path = root_dir / blob_folder_name / "unet";
     
+    ov::Core core;
+    std::shared_ptr<ov::Model> model = core.read_model(root_dir / "unet" / "openvino_model.xml");
+    
     ov::AnyMap npu_props{
         {"PERFORMANCE_HINT", "LATENCY"},
-        {"WEIGHTS_PATH", (root_dir / "unet" / "openvino_model.bin").string()}
+        // {"WEIGHTS_PATH", (root_dir / "unet" / "openvino_model.bin").string()}
     };
+    npu_props.insert(ov::hint::model(model));
 
     ov::AnyMap properties{
         {"DEVICE_PROPERTIES", ov::AnyMap{{"NPU", npu_props}}},
