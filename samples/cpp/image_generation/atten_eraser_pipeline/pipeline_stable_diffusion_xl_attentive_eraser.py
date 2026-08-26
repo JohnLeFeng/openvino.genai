@@ -190,7 +190,6 @@ class AAS_XL(AttentionBase):
         model_type="SD",
         ss_steps=9,
         ss_scale=1.0,
-        use_single_softmax_output_gating=False,
     ):
         """
         Args:
@@ -203,7 +202,6 @@ class AAS_XL(AttentionBase):
             model_type: the model type, SD or SDXL
             ss_steps: number of steps to apply softmax scaling
             ss_scale: scale factor for foreground suppression
-            use_single_softmax_output_gating: if True, use experimental single-softmax output gating; if False, use original dual-softmax
         """
         super().__init__()
         self.total_steps = total_steps
@@ -217,13 +215,6 @@ class AAS_XL(AttentionBase):
         self.mask = mask  # mask with shape (1, 1 ,h, w)
         self.ss_steps = ss_steps
         self.ss_scale = ss_scale
-        self.use_single_softmax_output_gating = use_single_softmax_output_gating
-        aas_method = (
-            "EXPERIMENTAL (single-softmax output gating)"
-            if use_single_softmax_output_gating
-            else "ORIGINAL (dual-softmax)"
-        )
-        print("AAS method: ", aas_method)
         self.mask_16 = F.max_pool2d(mask, (1024 // 16, 1024 // 16)).round().squeeze().squeeze()
         self.mask_32 = F.max_pool2d(mask, (1024 // 32, 1024 // 32)).round().squeeze().squeeze()
         self.mask_64 = F.max_pool2d(mask, (1024 // 64, 1024 // 64)).round().squeeze().squeeze()
@@ -234,22 +225,11 @@ class AAS_XL(AttentionBase):
         if is_mask_attn:
             mask_flatten = mask.flatten(0)
             if self.cur_step <= self.ss_steps:
-                if self.use_single_softmax_output_gating:
-                    # ========== EXPERIMENTAL: Single-softmax output gating ==========
-                    # Apply mask penalty to suppress masked region
-                    mask_penalty = mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
-                    sim_masked = sim + mask_penalty
-                    attn = sim_masked.softmax(-1)
-                else:
-                    # ========== ORIGINAL APPROACH: Dual-softmax with ss_scale*sim ==========
-                    # background
-                    sim_bg = sim + mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
-
-                    # object
-                    sim_fg = self.ss_scale * sim
-                    sim_fg += mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
-                    sim = torch.cat([sim_fg, sim_bg], dim=0)
-                    attn = sim.softmax(-1)
+                sim_bg = sim + mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
+                sim_fg = self.ss_scale * sim
+                sim_fg += mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
+                sim = torch.cat([sim_fg, sim_bg], dim=0)
+                attn = sim.softmax(-1)
             else:
                 sim += mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
                 attn = sim.softmax(-1)
@@ -259,10 +239,6 @@ class AAS_XL(AttentionBase):
         if len(attn) == 2 * len(v):
             v = torch.cat([v] * 2)
         out = torch.einsum("h i j, h j d -> h i d", attn, v)
-        if is_mask_attn and self.use_single_softmax_output_gating and self.cur_step <= self.ss_steps:
-            mask_suppression = 1.0 - mask_flatten * (1.0 - self.ss_scale)
-            out_fg = out * mask_suppression.unsqueeze(0).unsqueeze(-1)
-            out = torch.cat([out_fg, out], dim=0)
         out = rearrange(out, "(h1 h) (b n) d -> (h1 b) n (h d)", b=B, h=num_heads)
         return out
 
@@ -1649,7 +1625,6 @@ class StableDiffusionXL_AE_Pipeline(
         AAS_start_step: int = 0,  # AE parameter
         AAS_start_layer: int = 34,  # AE parameter
         AAS_end_layer: int = 70,  # AE parameter
-        use_single_softmax_output_gating: bool = False,  # AE parameter: experimental output gating
         num_inference_steps: int = 50,
         timesteps: List[int] = None,
         denoising_start: Optional[float] = None,
@@ -1919,7 +1894,6 @@ class StableDiffusionXL_AE_Pipeline(
         self._AAS_start_step = AAS_start_step
         self._AAS_start_layer = AAS_start_layer
         self._AAS_end_layer = AAS_end_layer
-        self._use_single_softmax_output_gating = use_single_softmax_output_gating
         ###########
 
         # 2. Define call parameters
@@ -2142,7 +2116,6 @@ class StableDiffusionXL_AE_Pipeline(
                 model_type="SDXL",
                 ss_steps=self._ss_steps,
                 ss_scale=self._ss_scale,
-                use_single_softmax_output_gating=self._use_single_softmax_output_gating,
             )
             self.regiter_attention_editor_diffusers(self.unet, editor)
 

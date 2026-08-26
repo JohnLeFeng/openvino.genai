@@ -100,7 +100,6 @@ class AAS_Base(AttentionBase):
         model_type="SD",
         ss_steps=9,
         ss_scale=1.0,
-        use_single_softmax_output_gating=False,
     ):
         """
         Args:
@@ -114,7 +113,6 @@ class AAS_Base(AttentionBase):
             model_type: the model type, SD or SDXL
             ss_steps: number of steps to apply softmax scaling
             ss_scale: scale factor for foreground suppression
-            use_single_softmax_output_gating: if True, use experimental single-softmax output gating; if False, use original dual-softmax
         """
         super().__init__()
         self.attnstore = attnstore
@@ -129,13 +127,6 @@ class AAS_Base(AttentionBase):
         self.mask = mask  # mask with shape (1, 1 ,h, w)
         self.ss_steps = ss_steps
         self.ss_scale = ss_scale
-        self.use_single_softmax_output_gating = use_single_softmax_output_gating
-        aas_method = (
-            "EXPERIMENTAL (single-softmax output gating)"
-            if use_single_softmax_output_gating
-            else "ORIGINAL (dual-softmax)"
-        )
-        print("AAS method: ", aas_method)
         print("AAS at denoising steps: ", self.step_idx)
         print("AAS at U-Net layers: ", self.layer_idx)
         print("start AAS")
@@ -159,67 +150,22 @@ class AAS_Base(AttentionBase):
             out = rearrange(out, "(h1 h) (b n) d -> (h1 b) n (h d)", b=B, h=num_heads)
             return out
         
-        # Mask attention - choose between output gating and original AAS.
         mask_flatten = mask.flatten(0)
-        
-        if self.use_single_softmax_output_gating:
-            # ========== EXPERIMENTAL: Single-softmax output gating ==========
-            # This creates only 1 softmax operation (vs 2 in original)
-            # and achieves better suppression of masked regions
-            
-            if self.cur_step <= self.ss_steps:
-                # Apply mask penalty to suppress masked regions in attention weights
-                mask_penalty = mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
-                
-                # Single shared attention with mask penalty
-                sim_masked = sim + mask_penalty
-                attn = sim_masked.softmax(-1)
-                
-                # Compute base output with background features
-                if len(attn) != len(v):
-                    v_doubled = torch.cat([v] * 2)
-                else:
-                    v_doubled = v
-                out_base = torch.einsum("h i j, h j d -> h i d", attn, v_doubled)
-                
-                # Duplicate output for fg/bg branches
-                out = torch.cat([out_base, out_base], dim=0)
-                
-                # Apply selective suppression: preserve unmasked (×1.0), suppress masked (×ss_scale)
-                mask_suppression = 1.0 - mask_flatten * (1.0 - self.ss_scale)
-                out_fg = out[:len(out)//2] * mask_suppression.unsqueeze(-1).unsqueeze(0)
-                out_bg = out[len(out)//2:]
-                out = torch.cat([out_fg, out_bg], dim=0)
-            else:
-                # No suppression after ss_steps
-                mask_penalty = mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
-                sim_masked = sim + mask_penalty
-                attn = sim_masked.softmax(-1)
-                
-                if len(attn) == 2 * len(v):
-                    v = torch.cat([v] * 2)
-                out = torch.einsum("h i j, h j d -> h i d", attn, v)
-        
+
+        # Original dual-branch AAS behavior.
+        if self.cur_step <= self.ss_steps:
+            sim_bg = sim + mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
+            sim_fg = self.ss_scale * sim
+            sim_fg += mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
+            sim = torch.cat([sim_fg, sim_bg], dim=0)
         else:
-            # ========== ORIGINAL APPROACH: Dual-softmax with ss_scale*sim ==========
-            # This creates 2 softmax operations (one for bg, one for fg)
-            
-            if self.cur_step <= self.ss_steps:
-                # background
-                sim_bg = sim + mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
-                # object - scale similarity BEFORE softmax
-                sim_fg = self.ss_scale * sim
-                sim_fg += mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
+            sim += mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
 
-                sim = torch.cat([sim_fg, sim_bg], dim=0)
-            else:
-                sim += mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
+        attn = sim.softmax(-1)
 
-            attn = sim.softmax(-1)
-
-            if len(attn) == 2 * len(v):
-                v = torch.cat([v] * 2)
-            out = torch.einsum("h i j, h j d -> h i d", attn, v)
+        if len(attn) == 2 * len(v):
+            v = torch.cat([v] * 2)
+        out = torch.einsum("h i j, h j d -> h i d", attn, v)
         
         # Store attention if requested
         if self.attnstore is not None:
@@ -1353,7 +1299,6 @@ class StableDiffusionInpaintPipeline(
         AAS_start_step: int = 0,  # AE parameter
         AAS_start_layer: int = 34,  # AE parameter
         AAS_end_layer: int = 70,  # AE parameter
-        use_single_softmax_output_gating: bool = False,  # AE parameter: experimental output gating
         negative_prompt: Optional[Union[str, List[str]]] = None,
         num_images_per_prompt: Optional[int] = 1,
         eta: float = 0.0,
@@ -1730,7 +1675,6 @@ class StableDiffusionInpaintPipeline(
                 model_type="SD",
                 ss_steps=self._ss_steps,
                 ss_scale=self._ss_scale,
-                use_single_softmax_output_gating=use_single_softmax_output_gating,
             )
             self.regiter_attention_editor_diffusers(self.unet, editor)
 

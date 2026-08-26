@@ -14,8 +14,9 @@ import argparse
 from types import MethodType
 
 
-dtype = torch.float16
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+dtype = torch.float16 if device.type == "cuda" else torch.float32
+SAMPLE_DIR = Path(__file__).resolve().parent
 
 
 MODEL_CONFIG = {
@@ -24,7 +25,7 @@ MODEL_CONFIG = {
         # "model_name": "Manojb/stable-diffusion-2-1-base",
         "model_name": "C:\\Users\\John\\Documents\\ov_genai_fork3\\stable-diffusion-2-1-base",
         "pipeline": StableDiffusionInpaintPipeline,
-        "custom_pipeline": "./atten_eraser_pipeline/pipeline_inp.py",
+        "custom_pipeline": str(SAMPLE_DIR / "atten_eraser_pipeline" / "pipeline_inp.py"),
         "height": 512,
         "width": 512,
         "mask_blur_kernel": 7,
@@ -46,7 +47,9 @@ MODEL_CONFIG = {
     "SDXL": {
         "model_name": "stabilityai/stable-diffusion-xl-base-1.0",
         "pipeline": DiffusionPipeline,
-        "custom_pipeline": "./atten_eraser_pipeline/pipeline_stable_diffusion_xl_attentive_eraser.py",
+        "custom_pipeline": str(
+            SAMPLE_DIR / "atten_eraser_pipeline" / "pipeline_stable_diffusion_xl_attentive_eraser.py"
+        ),
         "height": 1024,
         "width": 1024,
         "mask_blur_kernel": 77,
@@ -84,11 +87,6 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--save-intermediate", action="store_true", help="Save intermediate denoising steps")
     parser.add_argument(
         "--intermediate-steps", type=int, default=1, help="Save intermediate result every N steps (default: 1)"
-    )
-    parser.add_argument(
-        "--use-single-softmax-output-gating",
-        action="store_true",
-        help="Use experimental single-softmax output gating (default: False, use original dual-softmax AAS)",
     )
     return parser.parse_args(argv)
 
@@ -175,32 +173,55 @@ def _runtime_aas_masked_attention(
     if not is_mask_attn:
         return attention_output(attn)
 
-    mask_flatten = mask.reshape(-1)
     key_mask = mask.reshape(1, 1, -1)
     mask_penalty = key_mask.masked_fill(key_mask == 1, torch.finfo(sim.dtype).min)
-    
-    # Use single-softmax output gating or original dual-softmax AAS.
-    if hasattr(self, "use_single_softmax_output_gating") and self.use_single_softmax_output_gating:
-        # ========== EXPERIMENTAL: Single-softmax output gating ==========
-        sim_masked = sim + mask_penalty
-        attn_weights = sim_masked.softmax(dim=2)
-        out_base = attention_output(attn_weights)
-        out_fg = out_base
-        out_bg = out_base
-        
-        # Apply mask_suppression only during ss_steps
-        if self.runtime_cur_step <= self.runtime_ss_steps:
-            mask_suppression = 1.0 - mask_flatten * (1.0 - self.ss_scale)
-            out_fg = out_base * mask_suppression.unsqueeze(-1).unsqueeze(0)
-    else:
-        # ========== ORIGINAL APPROACH: Dual-softmax with ss_scale*sim ==========
-        sim_bg = sim + mask_penalty
-        sim_fg = self.ss_scale * sim + mask_penalty
-        out_bg = attention_output(sim_bg.softmax(dim=2))
-        out_fg = attention_output(sim_fg.softmax(dim=2))
-        out_fg = torch.where(self.runtime_cur_step <= self.runtime_ss_steps, out_fg, out_bg)
-    
+
+    sim_bg = sim + mask_penalty
+    sim_fg = self.ss_scale * sim + mask_penalty
+    out_bg = attention_output(sim_bg.softmax(dim=2))
+    out_fg = attention_output(sim_fg.softmax(dim=2))
+    out_fg = torch.where(self.runtime_cur_step <= self.runtime_ss_steps, out_fg, out_bg)
+
     return torch.cat([out_fg, out_bg], dim=0)
+
+
+def prepare_unet_for_export(model):
+    import openvino as ov
+
+    if len(model.inputs) == 6:
+        expected_input_names = ("sample", "timestep", "encoder_hidden_states", "mask", "cur_step", "ss_steps")
+    elif len(model.inputs) == 8:
+        expected_input_names = (
+            "sample",
+            "timestep",
+            "encoder_hidden_states",
+            "text_embeds",
+            "time_ids",
+            "mask",
+            "cur_step",
+            "ss_steps",
+        )
+    else:
+        raise ValueError(f"Expected an SD or SDXL Attentive Eraser UNet, got {len(model.inputs)} inputs")
+
+    for model_input, input_name in zip(model.inputs, expected_input_names):
+        model_input.get_tensor().set_names({input_name})
+
+    preprocessor = ov.preprocess.PrePostProcessor(model)
+    for input_name in ("sample", "encoder_hidden_states", "text_embeds", "time_ids", "mask"):
+        if input_name in expected_input_names:
+            preprocessor.input(input_name).tensor().set_element_type(ov.Type.f32)
+    preprocessor.output(0).tensor().set_element_type(ov.Type.f32)
+    return preprocessor.build()
+
+
+def trace_unet_for_export(wrapper, example_input):
+    return torch.jit.trace(
+        wrapper,
+        example_kwarg_inputs=example_input,
+        check_trace=False,
+        strict=False,
+    )
 
 
 def convert_unet_to_openvino(
@@ -348,7 +369,9 @@ def convert_unet_to_openvino(
 
     wrapper = (UNetWrapperSDXL if is_sdxl else UNetWrapperSD)(unet, editor)
     with torch.no_grad():
-        ov_model = ov.convert_model(wrapper, example_input=example_input)
+        traced_model = trace_unet_for_export(wrapper, example_input)
+        ov_model = ov.convert_model(traced_model)
+    ov_model = prepare_unet_for_export(ov_model)
 
     export_dir.mkdir(parents=True, exist_ok=True)
     ov.save_model(ov_model, export_dir / "openvino_model.xml")
@@ -460,7 +483,6 @@ def main():
         AAS_start_step=model_config["AAS_start_step"],  # AAS start step
         AAS_start_layer=model_config["AAS_start_layer"],  # AAS start layer
         AAS_end_layer=model_config["AAS_end_layer"],  # AAS end layer
-        use_single_softmax_output_gating=args.use_single_softmax_output_gating,
         num_inference_steps=num_inference_steps,  # AAS_end_step = int(strength*num_inference_steps)
         generator=generator,
         guidance_scale=1,
@@ -470,9 +492,7 @@ def main():
 
     if not export_model_only:
         output_dir.mkdir(parents=True, exist_ok=True)
-        # Add tag to filename indicating which AAS method was used
-        aas_tag = "single_softmax_output_gating" if args.use_single_softmax_output_gating else "original_aas"
-        output_image_path = output_dir / f"result_{aas_tag}.png"
+        output_image_path = output_dir / "result.png"
         image.save(output_image_path)
         print(f"Object removal completed. Image saved to {output_image_path}")
 
