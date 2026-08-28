@@ -33,17 +33,16 @@ class TestAttentiveEraser:
         assert "MODEL_DIR IMAGE MASK_IMAGE [DEVICE] [SEED]" in result.stdout
 
     @pytest.mark.samples
-    def test_python_sample_resizes_image_and_mask(self, tmp_path):
+    def test_python_sample_uses_rgb_loader_for_image_and_mask(self, tmp_path):
         sample = load_attentive_eraser_sample()
         image_path = tmp_path / "image.png"
         mask_path = tmp_path / "mask.png"
         Image.new("RGB", (2, 1), "white").save(image_path)
         Image.new("L", (2, 1), 255).save(mask_path)
 
-        image, image_resized = sample.read_image(image_path, (4, 3))
-        mask, mask_resized = sample.read_mask(mask_path, (4, 3))
+        image = sample.read_image(image_path)
+        mask = sample.read_image(mask_path)
 
-        assert image.shape == [1, 3, 4, 3]
-        assert mask.shape == [1, 3, 4, 1]
-        assert image_resized
-        assert mask_resized
+        assert image.shape == [1, 1, 2, 3]
+        assert mask.shape == [1, 1, 2, 3]
+        assert not hasattr(sample, "read_mask")

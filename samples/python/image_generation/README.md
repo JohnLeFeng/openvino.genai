@@ -278,7 +278,7 @@ python attentive_eraser_pipeline.py ./sd15_atten_eraser_ov source_image.png mask
 
 The positive prompt is intentionally empty for object removal. The sample keeps `strength`, removal guidance scale, self-attention suppression steps, and inference steps visible in the generation config so they can be edited without expanding the CLI. It uses `strength = 0.8`, which executes 40 of the configured 50 denoising steps.
 
-The sample reads the model's fixed dimensions and resizes mismatched image or mask inputs with nearest-neighbor interpolation: 512x512 for SD1.5/SD2 and 1024x1024 for SDXL. It prints the target dimensions when resizing, while the pipeline itself retains its fixed-size input contract. Gaussian blur, mask binarization, and latent-mask max pooling remain internal pipeline operations. The generated image is saved as `object_removed_image.bmp`.
+The pipeline resizes mismatched image or mask inputs to the model's fixed dimensions: 512x512 for SD1.5/SD2 and 1024x1024 for SDXL. Gaussian blur, mask binarization, and latent-mask max pooling remain internal pipeline operations. The generated image is saved as `object_removed_image.bmp`.
 
 ## benchmarking sample for image generation pipelines
 

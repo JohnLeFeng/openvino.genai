@@ -10,24 +10,9 @@ import numpy as np
 from PIL import Image
 
 
-def read_image(path: str, target_size: tuple[int, int]) -> tuple[openvino.Tensor, bool]:
+def read_image(path: str) -> openvino.Tensor:
     image = Image.open(path).convert("RGB")
-    resized = image.size != target_size
-    if resized:
-        image = image.resize(target_size, Image.Resampling.NEAREST)
-    return openvino.Tensor(np.array(image)[None]), resized
-
-
-def read_mask(path: str, target_size: tuple[int, int]) -> tuple[openvino.Tensor, bool]:
-    mask = Image.open(path)
-    mask = mask.convert("L" if len(mask.getbands()) == 1 else "RGB")
-    resized = mask.size != target_size
-    if resized:
-        mask = mask.resize(target_size, Image.Resampling.NEAREST)
-    mask_data = np.array(mask)
-    if mask_data.ndim == 2:
-        mask_data = mask_data[..., None]
-    return openvino.Tensor(mask_data[None]), resized
+    return openvino.Tensor(np.array(image)[None])
 
 
 def main():
@@ -50,11 +35,8 @@ def main():
     attentive_eraser.ss_steps = 9
 
     config = pipeline.get_generation_config()
-    target_size = (config.width, config.height)
-    image, image_resized = read_image(args.image, target_size)
-    mask, mask_resized = read_mask(args.mask_image, target_size)
-    if image_resized or mask_resized:
-        print(f"Resizing image and mask to {config.width}x{config.height}")
+    image = read_image(args.image)
+    mask = read_image(args.mask_image)
 
     config.strength = 0.8
     config.num_inference_steps = 50
