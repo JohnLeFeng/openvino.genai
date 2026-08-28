@@ -111,6 +111,8 @@ class AAS_Base(AttentionBase):
             mask: source mask with shape (h, w)
             mask_save_dir: the path to save the mask image
             model_type: the model type, SD or SDXL
+            ss_steps: number of steps to apply softmax scaling
+            ss_scale: scale factor for foreground suppression
         """
         super().__init__()
         self.attnstore = attnstore
@@ -138,28 +140,37 @@ class AAS_Base(AttentionBase):
 
     def attn_batch(self, q, k, v, sim, attn, is_cross, place_in_unet, num_heads, is_mask_attn, mask, **kwargs):
         B = q.shape[0] // num_heads
-        if is_mask_attn:
-            mask_flatten = mask.flatten(0)
-            if self.cur_step <= self.ss_steps:
-                # background
-                sim_bg = sim + mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
-                # object
-                sim_fg = self.ss_scale * sim
-                sim_fg += mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
+        
+        if not is_mask_attn:
+            # No mask attention, use standard computation
+            attn = sim.softmax(-1)
+            if self.attnstore is not None:
+                self.attnstore(attn, is_cross, place_in_unet, self.cur_step)
+            out = torch.einsum("h i j, h j d -> h i d", attn, v)
+            out = rearrange(out, "(h1 h) (b n) d -> (h1 b) n (h d)", b=B, h=num_heads)
+            return out
+        
+        mask_flatten = mask.flatten(0)
 
-                sim = torch.cat([sim_fg, sim_bg], dim=0)
-
-            else:
-                sim += mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
+        # Original dual-branch AAS behavior.
+        if self.cur_step <= self.ss_steps:
+            sim_bg = sim + mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
+            sim_fg = self.ss_scale * sim
+            sim_fg += mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
+            sim = torch.cat([sim_fg, sim_bg], dim=0)
+        else:
+            sim += mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
 
         attn = sim.softmax(-1)
-        ## attn store
-        if self.attnstore is not None:
-            self.attnstore(attn, is_cross, place_in_unet, self.cur_step)
 
         if len(attn) == 2 * len(v):
             v = torch.cat([v] * 2)
         out = torch.einsum("h i j, h j d -> h i d", attn, v)
+        
+        # Store attention if requested
+        if self.attnstore is not None:
+            self.attnstore(attn, is_cross, place_in_unet, self.cur_step)
+        
         out = rearrange(out, "(h1 h) (b n) d -> (h1 b) n (h d)", b=B, h=num_heads)
         return out
 
