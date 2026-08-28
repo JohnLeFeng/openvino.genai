@@ -47,9 +47,8 @@ MODEL_CONFIG = {
     "SDXL": {
         "model_name": "stabilityai/stable-diffusion-xl-base-1.0",
         "pipeline": DiffusionPipeline,
-        "custom_pipeline": str(
-            SAMPLE_DIR / "atten_eraser_pipeline" / "pipeline_stable_diffusion_xl_attentive_eraser.py"
-        ),
+        "custom_pipeline": "pipeline_stable_diffusion_xl_attentive_eraser",
+        "custom_revision": "0.39.0",
         "height": 1024,
         "width": 1024,
         "mask_blur_kernel": 77,
@@ -433,6 +432,7 @@ def main():
         .from_pretrained(
             model_config["model_name"],
             custom_pipeline=model_config["custom_pipeline"],
+            custom_revision=model_config.get("custom_revision"),
             scheduler=scheduler,
             variant="fp16",
             use_safetensors=True,
