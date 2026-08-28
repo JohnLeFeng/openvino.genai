@@ -43,7 +43,7 @@ std::shared_ptr<ov::Model> make_dynamic_sd_unet() {
     ov::ParameterVector parameters;
     const std::vector<std::pair<std::string, ov::PartialShape>> inputs{{"sample", {-1, 4, -1, -1}},
                                                                        {"timestep", {}},
-                                                                       {"encoder_hidden_states", {-1, -1, -1}},
+                                                                       {"encoder_hidden_states", {-1, 77, 2048}},
                                                                        {"mask", {-1, -1, -1, -1}},
                                                                        {"cur_step", {}},
                                                                        {"ss_steps", {}}};
@@ -104,13 +104,13 @@ TEST(AttentiveEraserContractTest, ExposesFloatingPointInputsAndOutputAsF32) {
     EXPECT_EQ(model->output().get_element_type(), ov::element::f32);
 }
 
-TEST(AttentiveEraserContractTest, ReshapesSdGraphToFixedContract) {
+TEST(AttentiveEraserContractTest, PreservesIrOwnedCrossAttentionDimensions) {
     auto model = make_dynamic_sd_unet();
 
-    ov::genai::reshape_attentive_eraser_unet_model(model, 64, 8, 768);
+    ov::genai::reshape_attentive_eraser_unet_model(model, 64, 8);
 
     EXPECT_EQ(model->input("sample").get_partial_shape(), ov::PartialShape({2, 4, 64, 64}));
-    EXPECT_EQ(model->input("encoder_hidden_states").get_partial_shape(), ov::PartialShape({2, 77, 768}));
+    EXPECT_EQ(model->input("encoder_hidden_states").get_partial_shape(), ov::PartialShape({2, 77, 2048}));
     EXPECT_EQ(model->input("mask").get_partial_shape(), ov::PartialShape({1, 1, 512, 512}));
 }
 
