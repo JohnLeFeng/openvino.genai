@@ -137,6 +137,12 @@ def create_latents_callback(save_dir, step_interval):
     return latents_callback
 
 
+def prepare_unet_for_export(ov_model, cross_attention_dim):
+    """Preserve model-owned dimensions in the exported UNet interface."""
+    ov_model.reshape({"encoder_hidden_states": [-1, 77, cross_attention_dim]})
+    return ov_model
+
+
 def _find_aas_editor(unet):
     """Recover the AAS editor that the pipeline monkey-patched onto the UNet.
 
@@ -324,6 +330,7 @@ def convert_unet_to_openvino(
     wrapper = (UNetWrapperSDXL if is_sdxl else UNetWrapperSD)(unet, editor)
     with torch.no_grad():
         ov_model = ov.convert_model(wrapper, example_input=example_input)
+    ov_model = prepare_unet_for_export(ov_model, cross_attention_dim)
 
     export_dir.mkdir(parents=True, exist_ok=True)
     ov.save_model(ov_model, export_dir / "openvino_model.xml")

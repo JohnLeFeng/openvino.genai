@@ -68,8 +68,7 @@ std::shared_ptr<ov::Model> prepare_attentive_eraser_unet_model(std::shared_ptr<o
 
 void reshape_attentive_eraser_unet_model(const std::shared_ptr<ov::Model>& model,
                                          size_t sample_size,
-                                         size_t vae_scale_factor,
-                                         size_t cross_attention_dim);
+                                         size_t vae_scale_factor);
 
 inline std::shared_ptr<Scheduler> create_attentive_eraser_scheduler(
     const std::filesystem::path& scheduler_config_path,
