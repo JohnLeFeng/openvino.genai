@@ -139,7 +139,12 @@ def create_latents_callback(save_dir, step_interval):
 
 def prepare_unet_for_export(ov_model, cross_attention_dim):
     """Preserve model-owned dimensions in the exported UNet interface."""
-    ov_model.reshape({"encoder_hidden_states": [-1, 77, cross_attention_dim]})
+    shapes = {"encoder_hidden_states": [-1, 77, cross_attention_dim]}
+    input_names = {model_input.get_any_name() for model_input in ov_model.inputs}
+    if "text_embeds" in input_names:
+        shapes["text_embeds"] = [-1, 1280]
+        shapes["time_ids"] = [-1, 6]
+    ov_model.reshape(shapes)
     return ov_model
 
 
