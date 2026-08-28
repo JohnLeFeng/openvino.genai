@@ -14,8 +14,9 @@ import argparse
 from types import MethodType
 
 
-dtype = torch.float16
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+dtype = torch.float16 if device.type == "cuda" else torch.float32
+SAMPLE_DIR = Path(__file__).resolve().parent
 
 
 MODEL_CONFIG = {
@@ -24,7 +25,7 @@ MODEL_CONFIG = {
         # "model_name": "Manojb/stable-diffusion-2-1-base",
         "model_name": "C:\\Users\\John\\Documents\\ov_genai_fork3\\stable-diffusion-2-1-base",
         "pipeline": StableDiffusionInpaintPipeline,
-        "custom_pipeline": "./atten_eraser_pipeline/pipeline_inp.py",
+        "custom_pipeline": str(SAMPLE_DIR / "atten_eraser_pipeline" / "pipeline_inp.py"),
         "height": 512,
         "width": 512,
         "mask_blur_kernel": 7,
@@ -47,6 +48,7 @@ MODEL_CONFIG = {
         "model_name": "stabilityai/stable-diffusion-xl-base-1.0",
         "pipeline": DiffusionPipeline,
         "custom_pipeline": "pipeline_stable_diffusion_xl_attentive_eraser",
+        "custom_revision": "0.39.0",
         "height": 1024,
         "width": 1024,
         "mask_blur_kernel": 77,
@@ -181,12 +183,55 @@ def _runtime_aas_masked_attention(
     if not is_mask_attn:
         return attention_output(attn)
 
-    mask_flatten = mask.flatten(0)
-    mask_penalty = mask_flatten.masked_fill(mask_flatten == 1, torch.finfo(sim.dtype).min)
-    out_bg = attention_output((sim + mask_penalty).softmax(-1))
-    out_fg = attention_output((self.ss_scale * sim + mask_penalty).softmax(-1))
+    key_mask = mask.reshape(1, 1, -1)
+    mask_penalty = key_mask.masked_fill(key_mask == 1, torch.finfo(sim.dtype).min)
+
+    sim_bg = sim + mask_penalty
+    sim_fg = self.ss_scale * sim + mask_penalty
+    out_bg = attention_output(sim_bg.softmax(dim=2))
+    out_fg = attention_output(sim_fg.softmax(dim=2))
     out_fg = torch.where(self.runtime_cur_step <= self.runtime_ss_steps, out_fg, out_bg)
+
     return torch.cat([out_fg, out_bg], dim=0)
+
+
+def prepare_unet_for_export(model):
+    import openvino as ov
+
+    if len(model.inputs) == 6:
+        expected_input_names = ("sample", "timestep", "encoder_hidden_states", "mask", "cur_step", "ss_steps")
+    elif len(model.inputs) == 8:
+        expected_input_names = (
+            "sample",
+            "timestep",
+            "encoder_hidden_states",
+            "text_embeds",
+            "time_ids",
+            "mask",
+            "cur_step",
+            "ss_steps",
+        )
+    else:
+        raise ValueError(f"Expected an SD or SDXL Attentive Eraser UNet, got {len(model.inputs)} inputs")
+
+    for model_input, input_name in zip(model.inputs, expected_input_names):
+        model_input.get_tensor().set_names({input_name})
+
+    preprocessor = ov.preprocess.PrePostProcessor(model)
+    for input_name in ("sample", "encoder_hidden_states", "text_embeds", "time_ids", "mask"):
+        if input_name in expected_input_names:
+            preprocessor.input(input_name).tensor().set_element_type(ov.Type.f32)
+    preprocessor.output(0).tensor().set_element_type(ov.Type.f32)
+    return preprocessor.build()
+
+
+def trace_unet_for_export(wrapper, example_input):
+    return torch.jit.trace(
+        wrapper,
+        example_kwarg_inputs=example_input,
+        check_trace=False,
+        strict=False,
+    )
 
 
 def convert_unet_to_openvino(
@@ -275,7 +320,7 @@ def convert_unet_to_openvino(
             setattr(
                 editor,
                 f"mask_{res}",
-                F.max_pool2d(mask, (height // res, width // res)).round().squeeze().squeeze(),
+                F.max_pool2d(mask, (height // res, width // res)).round().squeeze(0).squeeze(0),
             )
 
     class UNetWrapperSDXL(torch.nn.Module):
@@ -334,8 +379,9 @@ def convert_unet_to_openvino(
 
     wrapper = (UNetWrapperSDXL if is_sdxl else UNetWrapperSD)(unet, editor)
     with torch.no_grad():
-        ov_model = ov.convert_model(wrapper, example_input=example_input)
-    ov_model = prepare_unet_for_export(ov_model, cross_attention_dim)
+        traced_model = trace_unet_for_export(wrapper, example_input)
+        ov_model = ov.convert_model(traced_model)
+    ov_model = prepare_unet_for_export(ov_model)
 
     export_dir.mkdir(parents=True, exist_ok=True)
     ov.save_model(ov_model, export_dir / "openvino_model.xml")
@@ -397,6 +443,7 @@ def main():
         .from_pretrained(
             model_config["model_name"],
             custom_pipeline=model_config["custom_pipeline"],
+            custom_revision=model_config.get("custom_revision"),
             scheduler=scheduler,
             variant="fp16",
             use_safetensors=True,
