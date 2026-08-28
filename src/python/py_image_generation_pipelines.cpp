@@ -355,6 +355,17 @@ void init_image_generation_pipelines(py::module_& m) {
         .def("to_string", &ov::genai::TaylorSeerCacheConfig::to_string)
         .def("__repr__", &ov::genai::TaylorSeerCacheConfig::to_string);
 
+    py::enum_<ov::genai::InpaintingMode>(m, "InpaintingMode")
+        .value("STANDARD", ov::genai::InpaintingMode::STANDARD)
+        .value("ATTENTIVE_ERASER", ov::genai::InpaintingMode::ATTENTIVE_ERASER);
+
+    py::class_<ov::genai::AttentiveEraserConfig>(m, "AttentiveEraserConfig")
+        .def(py::init<>())
+        .def_readwrite("rm_guidance_scale", &ov::genai::AttentiveEraserConfig::rm_guidance_scale)
+        .def_readwrite("ss_steps", &ov::genai::AttentiveEraserConfig::ss_steps)
+        .def_readwrite("mask_blur_kernel", &ov::genai::AttentiveEraserConfig::mask_blur_kernel)
+        .def("validate", &ov::genai::AttentiveEraserConfig::validate);
+
     py::class_<ov::genai::ImageGenerationConfig>(m, "ImageGenerationConfig", "This class is used for storing generation config for image generation pipeline.")
         .def(py::init<>())
         .def_readwrite("prompt_2", &ov::genai::ImageGenerationConfig::prompt_2)
@@ -373,6 +384,7 @@ void init_image_generation_pipelines(py::module_& m) {
         .def_readwrite("strength", &ov::genai::ImageGenerationConfig::strength)
         .def_readwrite("max_sequence_length", &ov::genai::ImageGenerationConfig::max_sequence_length)
         .def_readwrite("taylorseer_config", &ov::genai::ImageGenerationConfig::taylorseer_config)
+        .def_readwrite("attentive_eraser", &ov::genai::ImageGenerationConfig::attentive_eraser)
         .def("validate", &ov::genai::ImageGenerationConfig::validate)
         .def("update_generation_config", [](
             ov::genai::ImageGenerationConfig& config,
@@ -653,7 +665,9 @@ void init_image_generation_pipelines(py::module_& m) {
             const py::kwargs& kwargs
         ) {
             ScopedVar env_manager(pyutils::ov_tokenizers_module_path());
-            return std::make_unique<ov::genai::InpaintingPipeline>(models_path, device, pyutils::kwargs_to_any_map(kwargs));
+            return std::make_unique<ov::genai::InpaintingPipeline>(models_path,
+                                                                   device,
+                                                                   pyutils::kwargs_to_any_map(kwargs));
         }),
         py::arg("models_path"), "folder with exported model files.",
         py::arg("device"), "device on which inference will be done",

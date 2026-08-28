@@ -73,6 +73,17 @@ private:
 };
 
 /**
+ * Attentive Eraser-specific generation controls.
+ */
+struct OPENVINO_GENAI_EXPORTS AttentiveEraserConfig {
+    float rm_guidance_scale = 9.0f;
+    size_t ss_steps = 9;
+    size_t mask_blur_kernel = 0;
+
+    void validate() const;
+};
+
+/**
  * Generation config used for Image generation pipelines.
  * Note, that not all values are applicable for all pipelines and models - please, refer
  * to documentation of properties below to understand a meaning and applicability for specific models.
@@ -127,6 +138,11 @@ struct OPENVINO_GENAI_EXPORTS ImageGenerationConfig {
      * TaylorSeer configuration for models
      */
     std::optional<TaylorSeerCacheConfig> taylorseer_config;
+
+    /**
+     * Attentive Eraser-specific controls. Must be set when using attentive inpainting mode.
+     */
+    std::optional<AttentiveEraserConfig> attentive_eraser;
 
     /**
      * Checks whether image generation config is valid, otherwise throws an exception.
