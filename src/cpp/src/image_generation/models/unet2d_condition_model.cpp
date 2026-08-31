@@ -6,7 +6,6 @@
 #include "image_generation/models/unet_inference_static_bs1.hpp"
 
 #include <fstream>
-#include <string>
 
 #include "json_utils.hpp"
 #include "lora/helper.hpp"
@@ -31,8 +30,8 @@ UNet2DConditionModel::Config::Config(const std::filesystem::path& config_path) {
 
 UNet2DConditionModel::UNet2DConditionModel(const std::filesystem::path& root_dir) :
     m_config(root_dir / "config.json") {
-    m_vae_scale_factor = get_vae_scale_factor(root_dir.parent_path() / "vae_decoder" / "config.json");
     m_model = utils::singleton_core().read_model(root_dir / "openvino_model.xml");
+    m_vae_scale_factor = get_vae_scale_factor(root_dir.parent_path() / "vae_decoder" / "config.json");
 }
 
 UNet2DConditionModel::UNet2DConditionModel(const std::filesystem::path& root_dir,

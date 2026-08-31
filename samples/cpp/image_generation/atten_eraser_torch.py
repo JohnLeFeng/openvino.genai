@@ -222,7 +222,7 @@ def prepare_unet_for_export(model, cross_attention_dim=None):
     for model_input, input_name in zip(model.inputs, expected_input_names):
         model_input.get_tensor().set_names({input_name})
 
-    shapes = {"mask": [1, 1, -1, -1]}
+    shapes = {"sample": [2, 4, -1, -1], "mask": [1, 1, -1, -1]}
     if cross_attention_dim is not None:
         shapes["encoder_hidden_states"] = [-1, 77, cross_attention_dim]
         if "text_embeds" in expected_input_names:
@@ -374,7 +374,7 @@ def convert_unet_to_openvino(
             )[0]
 
     latent_h, latent_w = height // 8, width // 8
-    batch = 2  # classifier-free guidance doubles the batch
+    batch = 2  # AAS traces paired foreground/background attention branches.
     cross_attention_dim = unet.config.cross_attention_dim  # 2048 SDXL, 1024 SD2, 768 SD1.5
 
     example_input = {

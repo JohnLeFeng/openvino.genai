@@ -4,6 +4,7 @@
 #include "openvino/genai/image_generation/inpainting_pipeline.hpp"
 
 #include <chrono>
+#include <filesystem>
 
 #include "imwrite.hpp"
 #include "load_image.hpp"
@@ -21,10 +22,13 @@ int32_t main(int32_t argc, char* argv[]) try {
     const std::string device = argc >= 5 ? argv[4] : "CPU";
     const size_t seed = argc == 6 ? std::stoull(argv[5]) : 123;
 
-    ov::genai::InpaintingPipeline pipeline(
-        models_path,
-        device,
-        ov::genai::inpainting_mode(ov::genai::InpaintingMode::ATTENTIVE_ERASER));
+    ov::AnyMap properties{
+        ov::genai::inpainting_mode(ov::genai::InpaintingMode::ATTENTIVE_ERASER),
+    };
+    if (device == "GPU") {
+        properties.insert(ov::cache_dir((std::filesystem::path(models_path) / "cache" / "GPU").string()));
+    }
+    ov::genai::InpaintingPipeline pipeline(models_path, device, properties);
 
     ov::genai::ImageGenerationConfig config = pipeline.get_generation_config();
     ov::Tensor image = utils::load_image(image_path);

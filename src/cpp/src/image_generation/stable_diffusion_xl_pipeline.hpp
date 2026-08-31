@@ -205,7 +205,8 @@ public:
     void reshape(const int num_images_per_prompt, const int height, const int width, const float guidance_scale) override {
         check_image_size(height, width);
 
-        const size_t batch_size_multiplier = m_unet->do_classifier_free_guidance(guidance_scale) ? 2 : 1;  // Unet accepts 2x batch in case of CFG
+        const size_t batch_size_multiplier =
+            m_use_attentive_eraser || m_unet->do_classifier_free_guidance(guidance_scale) ? 2 : 1;
         m_clip_text_encoder->reshape(batch_size_multiplier);
         m_clip_text_encoder_with_projection->reshape(batch_size_multiplier);
 
