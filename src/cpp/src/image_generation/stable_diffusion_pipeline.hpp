@@ -55,8 +55,6 @@ public:
 
         const std::string unet = data["unet"][1].get<std::string>();
         if (unet == "UNet2DConditionModel") {
-            auto unet_model = utils::singleton_core().read_model(root_dir / "unet" / "openvino_model.xml");
-            validate_attentive_eraser_unet_inputs(unet_model, m_use_attentive_eraser);
             m_unet = std::make_shared<UNet2DConditionModel>(root_dir / "unet");
         } else {
             OPENVINO_THROW("Unsupported '", unet, "' UNet type");
@@ -109,8 +107,6 @@ public:
 
         const std::string unet = data["unet"][1].get<std::string>();
         if (unet == "UNet2DConditionModel") {
-            auto unet_model = utils::singleton_core().read_model(root_dir / "unet" / "openvino_model.xml");
-            validate_attentive_eraser_unet_inputs(unet_model, m_use_attentive_eraser);
             m_unet = std::make_shared<UNet2DConditionModel>(root_dir / "unet", device, *updated_properties);
         } else {
             OPENVINO_THROW("Unsupported '", unet, "' UNet type");

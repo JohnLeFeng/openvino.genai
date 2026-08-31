@@ -61,15 +61,6 @@ ov::Tensor get_guidance_scale_embedding(float guidance_scale, uint32_t embedding
 namespace ov {
 namespace genai {
 
-void validate_attentive_eraser_unet_inputs(const std::shared_ptr<ov::Model>& model,
-                                           bool attentive_eraser_enabled);
-
-std::shared_ptr<ov::Model> prepare_attentive_eraser_unet_model(std::shared_ptr<ov::Model> model);
-
-void reshape_attentive_eraser_unet_model(const std::shared_ptr<ov::Model>& model,
-                                         size_t sample_size,
-                                         size_t vae_scale_factor);
-
 inline std::shared_ptr<Scheduler> create_attentive_eraser_scheduler(
     const std::filesystem::path& scheduler_config_path,
     bool attentive_eraser_enabled) {
