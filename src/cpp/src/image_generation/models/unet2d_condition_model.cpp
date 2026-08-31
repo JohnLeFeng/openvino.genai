@@ -13,7 +13,6 @@
 #include "json_utils.hpp"
 #include "lora/helper.hpp"
 #include "utils.hpp"
-#include "openvino/core/preprocess/pre_post_process.hpp"
 
 namespace ov {
 namespace genai {
@@ -21,28 +20,6 @@ namespace genai {
 size_t get_vae_scale_factor(const std::filesystem::path& vae_config_path);
 
 namespace {
-
-std::shared_ptr<ov::Model> prepare_attentive_eraser_unet_model(std::shared_ptr<ov::Model> model) {
-    OPENVINO_ASSERT(model, "UNet model must not be null");
-
-    std::set<std::string> input_names;
-    for (const auto& input : model->inputs()) {
-        input_names.insert(input.get_any_name());
-    }
-    if (input_names.count("mask") == 0 || input_names.count("cur_step") == 0 ||
-        input_names.count("ss_steps") == 0) {
-        return model;
-    }
-
-    ov::preprocess::PrePostProcessor preprocessor(model);
-    for (const char* input_name : {"sample", "encoder_hidden_states", "text_embeds", "time_ids", "mask"}) {
-        if (input_names.count(input_name) > 0) {
-            preprocessor.input(input_name).tensor().set_element_type(ov::element::f32);
-        }
-    }
-    preprocessor.output(0).tensor().set_element_type(ov::element::f32);
-    return preprocessor.build();
-}
 
 void reshape_attentive_eraser_unet_model(const std::shared_ptr<ov::Model>& model,
                                          size_t sample_size,
@@ -102,7 +79,6 @@ UNet2DConditionModel::UNet2DConditionModel(const std::filesystem::path& root_dir
     m_vae_scale_factor = get_vae_scale_factor(root_dir.parent_path() / "vae_decoder" / "config.json");
     m_model = utils::singleton_core().read_model(root_dir / "openvino_model.xml");
     reshape_attentive_eraser_unet_model(m_model, m_config.sample_size, m_vae_scale_factor);
-    m_model = prepare_attentive_eraser_unet_model(m_model);
 }
 
 UNet2DConditionModel::UNet2DConditionModel(const std::filesystem::path& root_dir,
@@ -120,7 +96,6 @@ UNet2DConditionModel::UNet2DConditionModel(const std::filesystem::path& root_dir
 
     m_model = utils::singleton_core().read_model(root_dir / "openvino_model.xml");
     reshape_attentive_eraser_unet_model(m_model, m_config.sample_size, m_vae_scale_factor);
-    m_model = prepare_attentive_eraser_unet_model(m_model);
     compile(device, properties_without_blob);
 }
 
@@ -131,7 +106,6 @@ UNet2DConditionModel::UNet2DConditionModel(const std::string& model,
     m_config(config), m_vae_scale_factor(vae_scale_factor) {
     m_model = utils::singleton_core().read_model(model, weights);
     reshape_attentive_eraser_unet_model(m_model, m_config.sample_size, m_vae_scale_factor);
-    m_model = prepare_attentive_eraser_unet_model(m_model);
 }
 
 UNet2DConditionModel::UNet2DConditionModel(const std::string& model,
