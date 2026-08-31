@@ -8,6 +8,7 @@
 #include <memory>
 #include <filesystem>
 
+#include "image_generation/attentive_eraser_utils.hpp"
 #include "image_generation/diffusion_pipeline.hpp"
 #include "image_generation/threaded_callback.hpp"
 

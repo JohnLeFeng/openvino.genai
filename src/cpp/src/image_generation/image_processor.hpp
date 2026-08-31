@@ -46,18 +46,5 @@ private:
     ov::InferRequest m_request;
 };
 
-// Attentive eraser mask processing: Gaussian blur + threshold binarization (not standard 0.5)
-ov::Tensor gaussian_blur_and_binarize_mask(const ov::Tensor& gray_mask,
-                                            size_t kernel_size,
-                                            float threshold);
-
-// Max-pool a single-channel NCHW mask by the given spatial factor
-ov::Tensor max_pool_mask(const ov::Tensor& mask, size_t factor);
-
-// NHWC u8 mask → grayscale NCHW f32 → Gaussian blur → threshold binarization
-ov::Tensor preprocess_attentive_mask(const ov::Tensor& mask,
-                                      size_t kernel_size,
-                                      float threshold);
-
 } // namespace genai
 } // namespace ov
