@@ -14,7 +14,6 @@
 
 #include "openvino/core/model.hpp"
 #include "openvino/genai/image_generation/generation_config.hpp"
-#include "openvino/genai/image_generation/image_generation_perf_metrics.hpp"
 #include "openvino/genai/image_generation/autoencoder_kl.hpp"
 
 #include "lora/helper.hpp"

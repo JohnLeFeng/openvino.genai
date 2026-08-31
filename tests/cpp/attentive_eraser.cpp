@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "image_generation/image_processor.hpp"
+#include "openvino/genai/image_generation/inpainting_pipeline.hpp"
 #include "image_generation/stable_diffusion_pipeline.hpp"
 
 #include <gtest/gtest.h>
