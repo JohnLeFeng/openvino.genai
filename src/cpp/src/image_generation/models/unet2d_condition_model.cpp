@@ -6,8 +6,6 @@
 #include "image_generation/models/unet_inference_static_bs1.hpp"
 
 #include <fstream>
-#include <map>
-#include <set>
 #include <string>
 
 #include "json_utils.hpp"
@@ -18,49 +16,6 @@ namespace ov {
 namespace genai {
 
 size_t get_vae_scale_factor(const std::filesystem::path& vae_config_path);
-
-namespace {
-
-void reshape_attentive_eraser_unet_model(const std::shared_ptr<ov::Model>& model,
-                                         size_t sample_size,
-                                         size_t vae_scale_factor) {
-    OPENVINO_ASSERT(model, "UNet model must not be null");
-
-    std::set<std::string> input_names;
-    for (const auto& input : model->inputs()) {
-        input_names.insert(input.get_any_name());
-    }
-    if (input_names.count("mask") == 0 || input_names.count("cur_step") == 0 ||
-        input_names.count("ss_steps") == 0) {
-        return;
-    }
-
-    OPENVINO_ASSERT(sample_size > 0 && vae_scale_factor > 0,
-                    "Attentive Eraser UNet requires static sample and VAE scale dimensions");
-    auto encoder_hidden_states_shape = model->input("encoder_hidden_states").get_partial_shape();
-    OPENVINO_ASSERT(encoder_hidden_states_shape.rank().is_static() &&
-                        encoder_hidden_states_shape.rank().get_length() == 3 &&
-                        encoder_hidden_states_shape[1].is_static() &&
-                        encoder_hidden_states_shape[2].is_static(),
-                    "Attentive Eraser UNet IR must define static token and cross-attention dimensions");
-    encoder_hidden_states_shape[0] = 2;
-
-    const size_t image_size = sample_size * vae_scale_factor;
-    std::map<std::string, ov::PartialShape> shapes{
-        {"sample", {2, 4, sample_size, sample_size}},
-        {"timestep", {}},
-        {"encoder_hidden_states", encoder_hidden_states_shape},
-        {"mask", {1, 1, image_size, image_size}},
-        {"cur_step", {}},
-        {"ss_steps", {}}};
-    if (input_names.count("text_embeds") > 0) {
-        shapes["text_embeds"] = {2, 1280};
-        shapes["time_ids"] = {2, 6};
-    }
-    model->reshape(shapes);
-}
-
-}  // namespace
 
 UNet2DConditionModel::Config::Config(const std::filesystem::path& config_path) {
     std::ifstream file(config_path);
@@ -78,7 +33,6 @@ UNet2DConditionModel::UNet2DConditionModel(const std::filesystem::path& root_dir
     m_config(root_dir / "config.json") {
     m_vae_scale_factor = get_vae_scale_factor(root_dir.parent_path() / "vae_decoder" / "config.json");
     m_model = utils::singleton_core().read_model(root_dir / "openvino_model.xml");
-    reshape_attentive_eraser_unet_model(m_model, m_config.sample_size, m_vae_scale_factor);
 }
 
 UNet2DConditionModel::UNet2DConditionModel(const std::filesystem::path& root_dir,
@@ -95,7 +49,6 @@ UNet2DConditionModel::UNet2DConditionModel(const std::filesystem::path& root_dir
     }
 
     m_model = utils::singleton_core().read_model(root_dir / "openvino_model.xml");
-    reshape_attentive_eraser_unet_model(m_model, m_config.sample_size, m_vae_scale_factor);
     compile(device, properties_without_blob);
 }
 
@@ -105,7 +58,6 @@ UNet2DConditionModel::UNet2DConditionModel(const std::string& model,
                                            const size_t vae_scale_factor) :
     m_config(config), m_vae_scale_factor(vae_scale_factor) {
     m_model = utils::singleton_core().read_model(model, weights);
-    reshape_attentive_eraser_unet_model(m_model, m_config.sample_size, m_vae_scale_factor);
 }
 
 UNet2DConditionModel::UNet2DConditionModel(const std::string& model,

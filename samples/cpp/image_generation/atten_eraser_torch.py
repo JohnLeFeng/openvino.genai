@@ -151,17 +151,6 @@ def create_latents_callback(save_dir, step_interval):
     return latents_callback
 
 
-def prepare_unet_for_export(ov_model, cross_attention_dim):
-    """Preserve model-owned dimensions in the exported UNet interface."""
-    shapes = {"encoder_hidden_states": [-1, 77, cross_attention_dim]}
-    input_names = {model_input.get_any_name() for model_input in ov_model.inputs}
-    if "text_embeds" in input_names:
-        shapes["text_embeds"] = [-1, 1280]
-        shapes["time_ids"] = [-1, 6]
-    ov_model.reshape(shapes)
-    return ov_model
-
-
 def _find_aas_editor(unet):
     """Recover the AAS editor that the pipeline monkey-patched onto the UNet.
 
@@ -177,6 +166,10 @@ def _find_aas_editor(unet):
         if code is not None and closure is not None and "editor" in code.co_freevars:
             return closure[code.co_freevars.index("editor")].cell_contents
     return None
+
+
+def _downsample_aas_mask(mask, kernel_size):
+    return F.max_pool2d(mask, kernel_size).round()[0, 0]
 
 
 def _runtime_aas_masked_attention(
@@ -207,7 +200,7 @@ def _runtime_aas_masked_attention(
     return torch.cat([out_fg, out_bg], dim=0)
 
 
-def prepare_unet_for_export(model):
+def prepare_unet_for_export(model, cross_attention_dim=None):
     import openvino as ov
 
     if len(model.inputs) == 6:
@@ -228,6 +221,14 @@ def prepare_unet_for_export(model):
 
     for model_input, input_name in zip(model.inputs, expected_input_names):
         model_input.get_tensor().set_names({input_name})
+
+    shapes = {"mask": [1, 1, -1, -1]}
+    if cross_attention_dim is not None:
+        shapes["encoder_hidden_states"] = [-1, 77, cross_attention_dim]
+        if "text_embeds" in expected_input_names:
+            shapes["text_embeds"] = [-1, 1280]
+            shapes["time_ids"] = [-1, 6]
+    model.reshape(shapes)
 
     preprocessor = ov.preprocess.PrePostProcessor(model)
     for input_name in ("sample", "encoder_hidden_states", "text_embeds", "time_ids", "mask"):
@@ -332,7 +333,7 @@ def convert_unet_to_openvino(
             setattr(
                 editor,
                 f"mask_{res}",
-                F.max_pool2d(mask, (height // res, width // res)).round().squeeze(0).squeeze(0),
+                _downsample_aas_mask(mask, (height // res, width // res)),
             )
 
     class UNetWrapperSDXL(torch.nn.Module):
@@ -393,7 +394,7 @@ def convert_unet_to_openvino(
     with torch.no_grad():
         traced_model = trace_unet_for_export(wrapper, example_input)
         ov_model = ov.convert_model(traced_model)
-    ov_model = prepare_unet_for_export(ov_model)
+    ov_model = prepare_unet_for_export(ov_model, cross_attention_dim)
 
     export_dir.mkdir(parents=True, exist_ok=True)
     ov.save_model(ov_model, export_dir / "openvino_model.xml")
