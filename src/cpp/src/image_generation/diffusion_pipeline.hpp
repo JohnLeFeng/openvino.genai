@@ -59,13 +59,6 @@ ov::Tensor get_guidance_scale_embedding(float guidance_scale, uint32_t embedding
 namespace ov {
 namespace genai {
 
-inline std::shared_ptr<Scheduler> create_attentive_eraser_scheduler(
-    const std::filesystem::path& scheduler_config_path,
-    bool attentive_eraser_enabled) {
-    return Scheduler::from_config(scheduler_config_path,
-                                  attentive_eraser_enabled ? Scheduler::Type::DDIM : Scheduler::Type::AUTO);
-}
-
 inline void apply_attentive_eraser_defaults(ImageGenerationConfig& generation_config) {
     generation_config.guidance_scale = 1.0f;
     generation_config.strength = 1.0f;

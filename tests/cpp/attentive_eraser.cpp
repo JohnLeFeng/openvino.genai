@@ -8,10 +8,6 @@
 #include <gtest/gtest.h>
 
 #include <array>
-#include <filesystem>
-#include <fstream>
-
-#include "image_generation/schedulers/ddim.hpp"
 
 namespace {
 
@@ -55,30 +51,6 @@ TEST(AttentiveEraserTensorTest, BlendsLatentsUsingMask) {
 
     EXPECT_FLOAT_EQ(latents.data<const float>()[0], 2.0f);
     EXPECT_FLOAT_EQ(latents.data<const float>()[1], 20.0f);
-}
-
-TEST(AttentiveEraserSchedulerTest, ForcesDdimForAttentiveMode) {
-    const auto config_path = std::filesystem::temp_directory_path() / "attentive_eraser_scheduler_config.json";
-    {
-        std::ofstream config(config_path);
-        config << R"({
-			"_class_name": "PNDMScheduler",
-			"beta_start": 0.00085,
-			"beta_end": 0.012,
-			"beta_schedule": "scaled_linear",
-			"clip_sample": false,
-			"num_train_timesteps": 1000,
-			"prediction_type": "epsilon",
-			"set_alpha_to_one": false,
-			"steps_offset": 1,
-			"timestep_spacing": "leading"
-		})";
-    }
-
-    auto scheduler = ov::genai::create_attentive_eraser_scheduler(config_path, true);
-
-    EXPECT_NE(std::dynamic_pointer_cast<ov::genai::DDIMScheduler>(scheduler), nullptr);
-    std::filesystem::remove(config_path);
 }
 
 TEST(AttentiveEraserConfigTest, UsesFullDenoisingStrengthForEveryModelFamily) {

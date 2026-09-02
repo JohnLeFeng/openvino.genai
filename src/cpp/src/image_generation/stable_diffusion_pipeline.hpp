@@ -44,8 +44,9 @@ public:
         nlohmann::json data = nlohmann::json::parse(file);
         using utils::read_json_param;
 
-        set_scheduler(create_attentive_eraser_scheduler(root_dir / "scheduler/scheduler_config.json",
-                                m_use_attentive_eraser));
+        set_scheduler(Scheduler::from_config(
+            root_dir / "scheduler/scheduler_config.json",
+            m_use_attentive_eraser ? Scheduler::Type::DDIM : Scheduler::Type::AUTO));
 
         const std::string text_encoder = data["text_encoder"][1].get<std::string>();
         if (text_encoder == "CLIPTextModel") {
@@ -93,8 +94,9 @@ public:
         nlohmann::json data = nlohmann::json::parse(file);
         using utils::read_json_param;
 
-        set_scheduler(create_attentive_eraser_scheduler(root_dir / "scheduler/scheduler_config.json",
-                                m_use_attentive_eraser));
+        set_scheduler(Scheduler::from_config(
+            root_dir / "scheduler/scheduler_config.json",
+            m_use_attentive_eraser ? Scheduler::Type::DDIM : Scheduler::Type::AUTO));
 
         auto updated_properties = update_adapters_in_properties(properties, &DiffusionPipeline::derived_adapters);
 
@@ -206,8 +208,9 @@ public:
             m_use_attentive_eraser);
 
         pipeline->m_root_dir = m_root_dir;
-        pipeline->set_scheduler(create_attentive_eraser_scheduler(m_root_dir / "scheduler/scheduler_config.json",
-                                      m_use_attentive_eraser));
+        pipeline->set_scheduler(Scheduler::from_config(
+            m_root_dir / "scheduler/scheduler_config.json",
+            m_use_attentive_eraser ? Scheduler::Type::DDIM : Scheduler::Type::AUTO));
         pipeline->set_generation_config(m_generation_config);
         return pipeline;
     }
