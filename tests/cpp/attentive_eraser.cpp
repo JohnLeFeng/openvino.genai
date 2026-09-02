@@ -8,13 +8,26 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <filesystem>
+#include <fstream>
+
+#include "image_generation/schedulers/ddim.hpp"
 
 namespace {
 
 class AttentiveEraserPipelineTestAccessor : public ov::genai::StableDiffusionPipeline {
 public:
+    explicit AttentiveEraserPipelineTestAccessor(bool use_attentive_eraser) :
+        StableDiffusionPipeline(ov::genai::PipelineType::INPAINTING) {
+        m_use_attentive_eraser = use_attentive_eraser;
+    }
+
     using StableDiffusionPipeline::apply_attentive_removal_guidance;
     using StableDiffusionPipeline::blend_attentive_latents;
+
+    bool uses_ddim_scheduler() const {
+        return std::dynamic_pointer_cast<ov::genai::DDIMScheduler>(m_scheduler) != nullptr;
+    }
 };
 
 TEST(AttentiveEraserTensorTest, ConvertsRgbMaskToGrayBeforeBinarizing) {
@@ -51,6 +64,33 @@ TEST(AttentiveEraserTensorTest, BlendsLatentsUsingMask) {
 
     EXPECT_FLOAT_EQ(latents.data<const float>()[0], 2.0f);
     EXPECT_FLOAT_EQ(latents.data<const float>()[1], 20.0f);
+}
+
+TEST(AttentiveEraserSchedulerTest, RejectsNonDdimOverrideAndKeepsCurrentScheduler) {
+    const auto config_path = std::filesystem::temp_directory_path() / "attentive_eraser_scheduler_config.json";
+    {
+        std::ofstream config(config_path);
+        config << R"({
+			"_class_name": "PNDMScheduler",
+			"beta_start": 0.00085,
+			"beta_end": 0.012,
+			"beta_schedule": "scaled_linear",
+			"clip_sample": false,
+			"num_train_timesteps": 1000,
+			"prediction_type": "epsilon",
+			"set_alpha_to_one": false,
+			"steps_offset": 1,
+			"timestep_spacing": "leading"
+		})";
+    }
+
+    AttentiveEraserPipelineTestAccessor pipeline(true);
+    pipeline.set_scheduler(ov::genai::Scheduler::from_config(config_path, ov::genai::Scheduler::Type::DDIM));
+    ov::genai::DiffusionPipeline& pipeline_interface = pipeline;
+
+    EXPECT_THROW(pipeline_interface.set_scheduler(ov::genai::Scheduler::from_config(config_path)), ov::Exception);
+    EXPECT_TRUE(pipeline.uses_ddim_scheduler());
+    std::filesystem::remove(config_path);
 }
 
 TEST(AttentiveEraserConfigTest, UsesFullDenoisingStrengthForEveryModelFamily) {

@@ -171,6 +171,12 @@ public:
         initialize_generation_config(pipeline_name);
     }
 
+    void set_scheduler(std::shared_ptr<Scheduler> scheduler) override {
+        OPENVINO_ASSERT(!m_use_attentive_eraser || std::dynamic_pointer_cast<DDIMScheduler>(scheduler),
+                        "Attentive Eraser mode requires a DDIM scheduler");
+        DiffusionPipeline::set_scheduler(scheduler);
+    }
+
     void reshape(const int num_images_per_prompt, const int height, const int width, const float guidance_scale) override {
         check_image_size(height, width);
 

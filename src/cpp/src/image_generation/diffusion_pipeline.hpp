@@ -101,7 +101,7 @@ public:
         m_generation_config.validate();
     }
 
-    void set_scheduler(std::shared_ptr<Scheduler> scheduler) {
+    virtual void set_scheduler(std::shared_ptr<Scheduler> scheduler) {
         auto casted = std::dynamic_pointer_cast<IScheduler>(scheduler);
         OPENVINO_ASSERT(casted != nullptr, "Passed incorrect scheduler type");
         m_scheduler = casted;
