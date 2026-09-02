@@ -265,6 +265,36 @@ public:
     }
 
     void compute_hidden_states(const std::string& positive_prompt, const ImageGenerationConfig& generation_config) override {
+        if (m_use_attentive_eraser) {
+            std::string prompt_2 = generation_config.prompt_2.value_or(positive_prompt);
+            auto infer_start = std::chrono::steady_clock::now();
+            ov::Tensor text_embeds = m_clip_text_encoder_with_projection->infer(positive_prompt, "", false);
+            m_perf_metrics.encoder_inference_duration["text_encoder_2"] =
+                std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - infer_start).count();
+            infer_start = std::chrono::steady_clock::now();
+            m_clip_text_encoder->infer(prompt_2, "", false);
+            m_perf_metrics.encoder_inference_duration["text_encoder"] =
+                std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - infer_start).count();
+
+            const size_t hidden_state_index_1 = m_clip_text_encoder->get_config().num_hidden_layers + 1;
+            const size_t hidden_state_index_2 = m_clip_text_encoder_with_projection->get_config().num_hidden_layers + 1;
+            ov::Tensor hidden_states = numpy_utils::concat(
+                m_clip_text_encoder->get_output_tensor(hidden_state_index_1),
+                m_clip_text_encoder_with_projection->get_output_tensor(hidden_state_index_2),
+                -1);
+            m_unet->set_hidden_states("encoder_hidden_states", numpy_utils::repeat(hidden_states, 2));
+            m_unet->set_hidden_states("text_embeds", numpy_utils::repeat(text_embeds, 2));
+
+            const float w = static_cast<float>(generation_config.width);
+            const float h = static_cast<float>(generation_config.height);
+            ov::Tensor time_ids(ov::element::f32, {2, 6});
+            const std::array<float, 6> values{w, h, 0.0f, 0.0f, w, h};
+            std::copy(values.begin(), values.end(), time_ids.data<float>());
+            std::copy(values.begin(), values.end(), time_ids.data<float>() + values.size());
+            m_unet->set_hidden_states("time_ids", time_ids);
+            return;
+        }
+
         const auto& unet_config = m_unet->get_config();
         const size_t batch_size_multiplier = m_unet->do_classifier_free_guidance(generation_config.guidance_scale) ? 2 : 1;  // Unet accepts 2x batch in case of CFG
 
@@ -433,36 +463,6 @@ public:
 protected:
     size_t attentive_eraser_mask_blur_kernel() const override {
         return 77;
-    }
-
-    void compute_attentive_eraser_hidden_states(const std::string& positive_prompt,
-                                                 const ImageGenerationConfig& generation_config) override {
-        std::string prompt_2 = generation_config.prompt_2.value_or(positive_prompt);
-        auto infer_start = std::chrono::steady_clock::now();
-        ov::Tensor text_embeds = m_clip_text_encoder_with_projection->infer(positive_prompt, "", false);
-        m_perf_metrics.encoder_inference_duration["text_encoder_2"] =
-            std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - infer_start).count();
-        infer_start = std::chrono::steady_clock::now();
-        m_clip_text_encoder->infer(prompt_2, "", false);
-        m_perf_metrics.encoder_inference_duration["text_encoder"] =
-            std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - infer_start).count();
-
-        const size_t hidden_state_index_1 = m_clip_text_encoder->get_config().num_hidden_layers + 1;
-        const size_t hidden_state_index_2 = m_clip_text_encoder_with_projection->get_config().num_hidden_layers + 1;
-        ov::Tensor hidden_states = numpy_utils::concat(
-            m_clip_text_encoder->get_output_tensor(hidden_state_index_1),
-            m_clip_text_encoder_with_projection->get_output_tensor(hidden_state_index_2),
-            -1);
-        m_unet->set_hidden_states("encoder_hidden_states", numpy_utils::repeat(hidden_states, 2));
-        m_unet->set_hidden_states("text_embeds", numpy_utils::repeat(text_embeds, 2));
-
-        const float w = static_cast<float>(generation_config.width);
-        const float h = static_cast<float>(generation_config.height);
-        ov::Tensor time_ids(ov::element::f32, {2, 6});
-        const std::array<float, 6> values{w, h, 0.0f, 0.0f, w, h};
-        std::copy(values.begin(), values.end(), time_ids.data<float>());
-        std::copy(values.begin(), values.end(), time_ids.data<float>() + values.size());
-        m_unet->set_hidden_states("time_ids", time_ids);
     }
 
     void export_model(const std::filesystem::path& export_path) override {

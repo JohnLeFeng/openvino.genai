@@ -215,6 +215,15 @@ public:
     }
 
     void compute_hidden_states(const std::string& positive_prompt, const ImageGenerationConfig& generation_config) override {
+        if (m_use_attentive_eraser) {
+            const auto infer_start = std::chrono::steady_clock::now();
+            ov::Tensor hidden_states = m_clip_text_encoder->infer(positive_prompt, "", false);
+            m_perf_metrics.encoder_inference_duration["text_encoder"] =
+                std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - infer_start).count();
+            m_unet->set_hidden_states("encoder_hidden_states", numpy_utils::repeat(hidden_states, 2));
+            return;
+        }
+
         const auto& unet_config = m_unet->get_config();
         const size_t batch_size_multiplier = m_unet->do_classifier_free_guidance(generation_config.guidance_scale) ? 2 : 1;  // Unet accepts 2x batch in case of CFG
 
@@ -328,6 +337,8 @@ public:
         const bool is_attentive = m_use_attentive_eraser && m_pipeline_type == PipelineType::INPAINTING;
 
         if (is_attentive) {
+            OPENVINO_ASSERT(positive_prompt.empty(),
+                            "Attentive eraser mode requires an empty positive prompt");
             OPENVINO_ASSERT(generation_config.attentive_eraser.has_value(),
                             "ImageGenerationConfig.attentive_eraser must be set in attentive eraser mode");
             OPENVINO_ASSERT(generation_config.guidance_scale == 1.0f,
@@ -383,11 +394,7 @@ public:
         std::vector<std::int64_t> timesteps = m_scheduler->get_timesteps();
 
         // compute text encoders and set hidden states
-        if (is_attentive) {
-            compute_attentive_eraser_hidden_states(positive_prompt, generation_config);
-        } else {
-            compute_hidden_states(positive_prompt, generation_config);
-        }
+        compute_hidden_states(positive_prompt, generation_config);
 
         // preparate initial / image latents
         ov::Tensor latent, processed_image, image_latent, noise;
@@ -587,15 +594,6 @@ protected:
 
     virtual size_t attentive_eraser_mask_blur_kernel() const {
         return 7;
-    }
-
-    virtual void compute_attentive_eraser_hidden_states(const std::string& positive_prompt,
-                                                         const ImageGenerationConfig& generation_config) {
-        const auto infer_start = std::chrono::steady_clock::now();
-        ov::Tensor hidden_states = m_clip_text_encoder->infer(positive_prompt, "", false);
-        m_perf_metrics.encoder_inference_duration["text_encoder"] =
-            std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - infer_start).count();
-        m_unet->set_hidden_states("encoder_hidden_states", numpy_utils::repeat(hidden_states, 2));
     }
 
     void initialize_attentive_eraser_generation_config() {
