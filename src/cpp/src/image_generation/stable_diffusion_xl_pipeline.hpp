@@ -67,7 +67,6 @@ public:
 
         // initialize generation config
         initialize_generation_config(data["_class_name"].get<std::string>());
-        initialize_attentive_eraser_generation_config();
 
         // initialize force_zeros_for_empty_prompt, which is SDXL specific
         read_json_param(data, "force_zeros_for_empty_prompt", m_force_zeros_for_empty_prompt);
@@ -162,7 +161,6 @@ public:
 
         // initialize generation config
         initialize_generation_config(data["_class_name"].get<std::string>());
-        initialize_attentive_eraser_generation_config();
 
         // initialize force_zeros_for_empty_prompt, which is SDXL specific
         read_json_param(data, "force_zeros_for_empty_prompt", m_force_zeros_for_empty_prompt);
@@ -503,6 +501,12 @@ private:
             }
         } else {
             OPENVINO_THROW("Unsupported class_name '", class_name, "'. Please, contact OpenVINO GenAI developers");
+        }
+
+        if (m_use_attentive_eraser) {
+            OPENVINO_ASSERT(m_pipeline_type == PipelineType::INPAINTING,
+                            "Attentive Eraser mode is available for inpainting pipelines only");
+            apply_attentive_eraser_defaults(m_generation_config);
         }
     }
 

@@ -76,7 +76,6 @@ public:
 
         // initialize generation config
         initialize_generation_config(data["_class_name"].get<std::string>());
-        initialize_attentive_eraser_generation_config();
     }
 
     StableDiffusionPipeline(PipelineType pipeline_type,
@@ -128,7 +127,6 @@ public:
 
         // initialize generation config
         initialize_generation_config(data["_class_name"].get<std::string>());
-        initialize_attentive_eraser_generation_config();
 
         update_adapters_from_properties(properties, m_generation_config.adapters);
     }
@@ -596,17 +594,6 @@ protected:
         return 7;
     }
 
-    void initialize_attentive_eraser_generation_config() {
-        if (!m_use_attentive_eraser) {
-            return;
-        }
-        OPENVINO_ASSERT(m_pipeline_type == PipelineType::INPAINTING,
-                        "Attentive Eraser mode is available for inpainting pipelines only");
-        OPENVINO_ASSERT(std::dynamic_pointer_cast<DDIMScheduler>(m_scheduler),
-                        "Attentive Eraser mode requires a DDIM scheduler");
-        apply_attentive_eraser_defaults(m_generation_config);
-    }
-
     size_t get_config_in_channels() const override {
         assert(m_unet != nullptr);
         return m_unet->get_config().in_channels;
@@ -653,6 +640,12 @@ protected:
             m_generation_config.strength = m_pipeline_type == PipelineType::IMAGE_2_IMAGE ? 0.8f : 1.0f;
         } else {
             OPENVINO_THROW("Unsupported class_name '", class_name, "'. Please, contact OpenVINO GenAI developers");
+        }
+
+        if (m_use_attentive_eraser) {
+            OPENVINO_ASSERT(m_pipeline_type == PipelineType::INPAINTING,
+                            "Attentive Eraser mode is available for inpainting pipelines only");
+            apply_attentive_eraser_defaults(m_generation_config);
         }
     }
 
