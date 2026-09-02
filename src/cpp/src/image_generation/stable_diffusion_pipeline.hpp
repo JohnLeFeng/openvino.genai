@@ -151,15 +151,13 @@ public:
     }
 
     StableDiffusionPipeline(PipelineType pipeline_type, const StableDiffusionPipeline& pipe) :
-        DiffusionPipeline(pipeline_type),
-        m_use_attentive_eraser(pipe.m_use_attentive_eraser) {
+        DiffusionPipeline(pipeline_type) {
         OPENVINO_ASSERT(!pipe.m_use_attentive_eraser,
                 "Cannot convert an Attentive Eraser inpainting pipeline to another pipeline type");
         m_root_dir = pipe.m_root_dir;
         m_clip_text_encoder = std::make_shared<CLIPTextModel>(*pipe.m_clip_text_encoder);
         m_unet = std::make_shared<UNet2DConditionModel>(*pipe.m_unet);
         m_vae = std::make_shared<AutoencoderKL>(*pipe.m_vae);
-        m_pipeline_type = pipeline_type;
         m_generation_config = pipe.m_generation_config;
         m_scheduler = pipe.m_scheduler;
 
