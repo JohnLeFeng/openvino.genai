@@ -51,6 +51,13 @@ InpaintingPipeline::InpaintingPipeline(const std::filesystem::path& root_dir, co
         compile_properties.erase(mode_iter);
     }
 
+    // Attentive Eraser supports only standard 4-channel latent UNets from SD1.5, SD2, and SDXL.
+    const bool attentive_eraser_supported =
+        class_name == "StableDiffusionPipeline" ||
+        class_name == "StableDiffusionXLPipeline";
+    OPENVINO_ASSERT(mode != InpaintingMode::ATTENTIVE_ERASER || attentive_eraser_supported,
+                    "Attentive Eraser mode supports Stable Diffusion and Stable Diffusion XL pipelines");
+
     auto start_time = std::chrono::steady_clock::now();
     if (class_name == "StableDiffusionPipeline" ||
         class_name == "LatentConsistencyModelPipeline" ||
@@ -67,13 +74,10 @@ InpaintingPipeline::InpaintingPipeline(const std::filesystem::path& root_dir, co
                                                             compile_properties,
                                                             mode == InpaintingMode::ATTENTIVE_ERASER);
     } else if (class_name == "FluxPipeline" || class_name == "FluxInpaintPipeline") {
-        OPENVINO_ASSERT(mode == InpaintingMode::STANDARD, "Attentive Eraser mode supports Stable Diffusion pipelines only");
         m_impl = std::make_shared<FluxPipeline>(PipelineType::INPAINTING, root_dir, device, compile_properties);
     } else if (class_name == "FluxFillPipeline") {
-        OPENVINO_ASSERT(mode == InpaintingMode::STANDARD, "Attentive Eraser mode supports Stable Diffusion pipelines only");
         m_impl = std::make_shared<FluxFillPipeline>(PipelineType::INPAINTING, root_dir, device, compile_properties);
     } else if (class_name == "StableDiffusion3Pipeline" || class_name == "StableDiffusion3InpaintPipeline") {
-        OPENVINO_ASSERT(mode == InpaintingMode::STANDARD, "Attentive Eraser mode supports Stable Diffusion pipelines only");
         m_impl = std::make_shared<StableDiffusion3Pipeline>(PipelineType::INPAINTING, root_dir, device, compile_properties);
     } else {
         OPENVINO_THROW("Unsupported inpainting pipeline '", class_name, "'");

@@ -93,6 +93,42 @@ TEST(AttentiveEraserSchedulerTest, RejectsNonDdimOverrideAndKeepsCurrentSchedule
     std::filesystem::remove(config_path);
 }
 
+class UnsupportedAttentiveEraserPipelineTest : public testing::TestWithParam<const char*> {};
+
+TEST_P(UnsupportedAttentiveEraserPipelineTest, RejectsUnsupportedModelFamily) {
+    const std::string class_name = GetParam();
+    const auto root_dir = std::filesystem::temp_directory_path() / ("attentive_eraser_" + class_name);
+    std::filesystem::create_directories(root_dir);
+    {
+        std::ofstream model_index(root_dir / "model_index.json");
+        model_index << R"({"_class_name": ")" << class_name << R"("})";
+    }
+
+    try {
+        ov::genai::InpaintingPipeline pipeline(
+            root_dir,
+            "CPU",
+            ov::genai::inpainting_mode(ov::genai::InpaintingMode::ATTENTIVE_ERASER));
+        FAIL() << "Expected Attentive Eraser to reject " << class_name;
+    } catch (const ov::Exception& error) {
+        EXPECT_NE(std::string(error.what()).find(
+                      "Attentive Eraser mode requires a 4-channel SD1.5, SD2, or SDXL pipeline"),
+                  std::string::npos);
+    }
+
+    std::filesystem::remove_all(root_dir);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    UnsupportedModelFamilies,
+    UnsupportedAttentiveEraserPipelineTest,
+    testing::Values("LatentConsistencyModelPipeline",
+                    "StableDiffusionInpaintPipeline",
+                    "StableDiffusionXLInpaintPipeline",
+                    "StableDiffusion3Pipeline",
+                    "FluxPipeline",
+                    "FluxFillPipeline"));
+
 TEST(AttentiveEraserConfigTest, UsesFullDenoisingStrengthForEveryModelFamily) {
     ov::genai::ImageGenerationConfig config;
     config.strength = 0.9999f;
