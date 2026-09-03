@@ -11,6 +11,7 @@ from openvino_genai.py_openvino_genai import ASRPipeline
 from openvino_genai.py_openvino_genai import ASRRawPerfMetrics
 from openvino_genai.py_openvino_genai import Adapter
 from openvino_genai.py_openvino_genai import AdapterConfig
+from openvino_genai.py_openvino_genai import AttentiveEraserConfig
 from openvino_genai.py_openvino_genai import AggregationMode
 from openvino_genai.py_openvino_genai import AutoencoderKL
 from openvino_genai.py_openvino_genai import AutoencoderKLLTXVideo
@@ -38,6 +39,7 @@ from openvino_genai.py_openvino_genai import ImageGenerationConfig
 from openvino_genai.py_openvino_genai import ImageGenerationPerfMetrics
 from openvino_genai.py_openvino_genai import IncrementalParser
 from openvino_genai.py_openvino_genai import InpaintingPipeline
+from openvino_genai.py_openvino_genai import InpaintingMode
 from openvino_genai.py_openvino_genai import KVCrushAnchorPointMode
 from openvino_genai.py_openvino_genai import KVCrushConfig
 from openvino_genai.py_openvino_genai import LLMPipeline

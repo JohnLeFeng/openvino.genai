@@ -43,20 +43,42 @@ InpaintingPipeline::InpaintingPipeline(const std::filesystem::path& root_dir) {
 
 InpaintingPipeline::InpaintingPipeline(const std::filesystem::path& root_dir, const std::string& device, const ov::AnyMap& properties) {
     const std::string class_name = get_class_name(root_dir);
+    ov::AnyMap compile_properties = properties;
+    InpaintingMode mode = InpaintingMode::STANDARD;
+    const auto mode_iter = compile_properties.find(inpainting_mode.name());
+    if (mode_iter != compile_properties.end()) {
+        mode = mode_iter->second.as<InpaintingMode>();
+        compile_properties.erase(mode_iter);
+    }
+
+    // Attentive Eraser supports only standard 4-channel latent UNets from SD1.5, SD2, and SDXL.
+    const bool attentive_eraser_supported =
+        class_name == "StableDiffusionPipeline" ||
+        class_name == "StableDiffusionXLPipeline";
+    OPENVINO_ASSERT(mode != InpaintingMode::ATTENTIVE_ERASER || attentive_eraser_supported,
+                    "Attentive Eraser mode supports Stable Diffusion and Stable Diffusion XL pipelines");
 
     auto start_time = std::chrono::steady_clock::now();
     if (class_name == "StableDiffusionPipeline" ||
         class_name == "LatentConsistencyModelPipeline" ||
         class_name == "StableDiffusionInpaintPipeline") {
-        m_impl = std::make_shared<StableDiffusionPipeline>(PipelineType::INPAINTING, root_dir, device, properties);
+        m_impl = std::make_shared<StableDiffusionPipeline>(PipelineType::INPAINTING,
+                                                          root_dir,
+                                                          device,
+                                                          compile_properties,
+                                                          mode == InpaintingMode::ATTENTIVE_ERASER);
     } else if (class_name == "StableDiffusionXLPipeline" || class_name == "StableDiffusionXLInpaintPipeline") {
-        m_impl = std::make_shared<StableDiffusionXLPipeline>(PipelineType::INPAINTING, root_dir, device, properties);
+        m_impl = std::make_shared<StableDiffusionXLPipeline>(PipelineType::INPAINTING,
+                                                            root_dir,
+                                                            device,
+                                                            compile_properties,
+                                                            mode == InpaintingMode::ATTENTIVE_ERASER);
     } else if (class_name == "FluxPipeline" || class_name == "FluxInpaintPipeline") {
-        m_impl = std::make_shared<FluxPipeline>(PipelineType::INPAINTING, root_dir, device, properties);
+        m_impl = std::make_shared<FluxPipeline>(PipelineType::INPAINTING, root_dir, device, compile_properties);
     } else if (class_name == "FluxFillPipeline") {
-        m_impl = std::make_shared<FluxFillPipeline>(PipelineType::INPAINTING, root_dir, device, properties);
+        m_impl = std::make_shared<FluxFillPipeline>(PipelineType::INPAINTING, root_dir, device, compile_properties);
     } else if (class_name == "StableDiffusion3Pipeline" || class_name == "StableDiffusion3InpaintPipeline") {
-        m_impl = std::make_shared<StableDiffusion3Pipeline>(PipelineType::INPAINTING, root_dir, device, properties);
+        m_impl = std::make_shared<StableDiffusion3Pipeline>(PipelineType::INPAINTING, root_dir, device, compile_properties);
     } else {
         OPENVINO_THROW("Unsupported inpainting pipeline '", class_name, "'");
     }

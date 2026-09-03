@@ -31,6 +31,13 @@ class DiffusionPipeline;
 class Text2ImagePipeline;
 class Image2ImagePipeline;
 
+enum class InpaintingMode {
+    STANDARD,
+    ATTENTIVE_ERASER,
+};
+
+static constexpr ov::Property<InpaintingMode> inpainting_mode{"inpainting_mode"};
+
 //
 // Inpainting pipeline
 //

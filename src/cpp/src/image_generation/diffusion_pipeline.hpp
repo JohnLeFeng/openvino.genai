@@ -59,6 +59,13 @@ ov::Tensor get_guidance_scale_embedding(float guidance_scale, uint32_t embedding
 namespace ov {
 namespace genai {
 
+inline void apply_attentive_eraser_defaults(ImageGenerationConfig& generation_config) {
+    generation_config.guidance_scale = 1.0f;
+    generation_config.strength = 1.0f;
+    generation_config.num_images_per_prompt = 1;
+    generation_config.attentive_eraser = AttentiveEraserConfig{};
+}
+
 enum class PipelineType {
     TEXT_2_IMAGE = 0,
     IMAGE_2_IMAGE = 1,
@@ -94,7 +101,7 @@ public:
         m_generation_config.validate();
     }
 
-    void set_scheduler(std::shared_ptr<Scheduler> scheduler) {
+    virtual void set_scheduler(std::shared_ptr<Scheduler> scheduler) {
         auto casted = std::dynamic_pointer_cast<IScheduler>(scheduler);
         OPENVINO_ASSERT(casted != nullptr, "Passed incorrect scheduler type");
         m_scheduler = casted;

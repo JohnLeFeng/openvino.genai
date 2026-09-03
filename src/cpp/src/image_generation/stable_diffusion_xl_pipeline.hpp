@@ -11,9 +11,12 @@ namespace genai {
 
 class StableDiffusionXLPipeline : public StableDiffusionPipeline {
 public:
-    StableDiffusionXLPipeline(PipelineType pipeline_type, const std::filesystem::path& root_dir) :
+    StableDiffusionXLPipeline(PipelineType pipeline_type,
+                              const std::filesystem::path& root_dir,
+                              bool use_attentive_eraser = false) :
         StableDiffusionPipeline(pipeline_type) {
         m_root_dir = root_dir;
+        m_use_attentive_eraser = use_attentive_eraser;
         const std::filesystem::path model_index_path = root_dir / "model_index.json";
         std::ifstream file(model_index_path);
         OPENVINO_ASSERT(file.is_open(), "Failed to open ", model_index_path);
@@ -21,7 +24,9 @@ public:
         nlohmann::json data = nlohmann::json::parse(file);
         using utils::read_json_param;
 
-        set_scheduler(Scheduler::from_config(root_dir / "scheduler/scheduler_config.json"));
+        set_scheduler(Scheduler::from_config(
+            root_dir / "scheduler/scheduler_config.json",
+            m_use_attentive_eraser ? Scheduler::Type::DDIM : Scheduler::Type::AUTO));
 
         const std::string text_encoder = data["text_encoder"][1].get<std::string>();
         if (text_encoder == "CLIPTextModel") {
@@ -68,9 +73,14 @@ public:
         read_json_param(data, "force_zeros_for_empty_prompt", m_force_zeros_for_empty_prompt);
     }
 
-    StableDiffusionXLPipeline(PipelineType pipeline_type, const std::filesystem::path& root_dir, const std::string& device, const ov::AnyMap& properties) :
+    StableDiffusionXLPipeline(PipelineType pipeline_type,
+                              const std::filesystem::path& root_dir,
+                              const std::string& device,
+                              const ov::AnyMap& properties,
+                              bool use_attentive_eraser = false) :
         StableDiffusionPipeline(pipeline_type) {
         m_root_dir = root_dir;
+        m_use_attentive_eraser = use_attentive_eraser;
         const std::filesystem::path model_index_path = root_dir / "model_index.json";
         std::ifstream file(model_index_path);
         OPENVINO_ASSERT(file.is_open(), "Failed to open ", model_index_path);
@@ -78,7 +88,9 @@ public:
         nlohmann::json data = nlohmann::json::parse(file);
         using utils::read_json_param;
 
-        set_scheduler(Scheduler::from_config(root_dir / "scheduler/scheduler_config.json"));
+        set_scheduler(Scheduler::from_config(
+            root_dir / "scheduler/scheduler_config.json",
+            m_use_attentive_eraser ? Scheduler::Type::DDIM : Scheduler::Type::AUTO));
 
         const auto [properties_without_blob, blob_path] = utils::extract_export_properties(properties);
 
@@ -163,8 +175,9 @@ public:
         const CLIPTextModel& clip_text_model,
         const CLIPTextModelWithProjection& clip_text_model_with_projection,
         const UNet2DConditionModel& unet,
-        const AutoencoderKL& vae)
-        : StableDiffusionPipeline(pipeline_type, clip_text_model, unet, vae) {
+        const AutoencoderKL& vae,
+        bool use_attentive_eraser = false)
+        : StableDiffusionPipeline(pipeline_type, clip_text_model, unet, vae, use_attentive_eraser) {
         m_clip_text_encoder_with_projection = std::make_shared<CLIPTextModelWithProjection>(clip_text_model_with_projection);
         // initialize generation config
         initialize_generation_config("StableDiffusionXLPipeline");
@@ -173,7 +186,7 @@ public:
     }
 
     StableDiffusionXLPipeline(PipelineType pipeline_type, const StableDiffusionXLPipeline& pipe) :
-        StableDiffusionXLPipeline(pipe) {
+        StableDiffusionPipeline(pipeline_type, pipe) {
         OPENVINO_ASSERT(!pipe.is_inpainting_model(), "Cannot create ",
             pipeline_type == PipelineType::TEXT_2_IMAGE ? "'Text2ImagePipeline'" : "'Image2ImagePipeline'", " from InpaintingPipeline with inpainting model");
 
@@ -185,13 +198,15 @@ public:
         m_vae = std::make_shared<AutoencoderKL>(*pipe.m_vae);
 
         m_pipeline_type = pipeline_type;
+        m_force_zeros_for_empty_prompt = pipe.m_force_zeros_for_empty_prompt;
         initialize_generation_config("StableDiffusionXLPipeline");
     }
 
     void reshape(const int num_images_per_prompt, const int height, const int width, const float guidance_scale) override {
         check_image_size(height, width);
 
-        const size_t batch_size_multiplier = m_unet->do_classifier_free_guidance(guidance_scale) ? 2 : 1;  // Unet accepts 2x batch in case of CFG
+        const size_t batch_size_multiplier =
+            m_use_attentive_eraser || m_unet->do_classifier_free_guidance(guidance_scale) ? 2 : 1;
         m_clip_text_encoder->reshape(batch_size_multiplier);
         m_clip_text_encoder_with_projection->reshape(batch_size_multiplier);
 
@@ -217,6 +232,14 @@ public:
         }
         m_vae->compile(vae_device, *updated_properties);
         updated_properties.fork().erase("NPU_COMPILATION_MODE_PARAMS");
+
+    }
+
+    ov::Tensor generate(const std::string& positive_prompt,
+                        ov::Tensor initial_image,
+                        ov::Tensor mask_image,
+                        const ov::AnyMap& properties) override {
+        return StableDiffusionPipeline::generate(positive_prompt, initial_image, mask_image, properties);
     }
 
     std::shared_ptr<DiffusionPipeline> clone() override {
@@ -231,15 +254,48 @@ public:
             *clip_text_encoder,
             *clip_text_encoder_with_projection,
             *unet,
-            *vae);
+            *vae,
+            m_use_attentive_eraser);
 
         pipeline->m_root_dir = m_root_dir;
-        pipeline->set_scheduler(Scheduler::from_config(m_root_dir / "scheduler/scheduler_config.json"));
+        pipeline->set_scheduler(Scheduler::from_config(
+            m_root_dir / "scheduler/scheduler_config.json",
+            m_use_attentive_eraser ? Scheduler::Type::DDIM : Scheduler::Type::AUTO));
         pipeline->set_generation_config(m_generation_config);
         return pipeline;
     }
 
     void compute_hidden_states(const std::string& positive_prompt, const ImageGenerationConfig& generation_config) override {
+        if (m_use_attentive_eraser) {
+            std::string prompt_2 = generation_config.prompt_2.value_or(positive_prompt);
+            auto infer_start = std::chrono::steady_clock::now();
+            ov::Tensor text_embeds = m_clip_text_encoder_with_projection->infer(positive_prompt, "", false);
+            m_perf_metrics.encoder_inference_duration["text_encoder_2"] =
+                std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - infer_start).count();
+            infer_start = std::chrono::steady_clock::now();
+            m_clip_text_encoder->infer(prompt_2, "", false);
+            m_perf_metrics.encoder_inference_duration["text_encoder"] =
+                std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - infer_start).count();
+
+            const size_t hidden_state_index_1 = m_clip_text_encoder->get_config().num_hidden_layers + 1;
+            const size_t hidden_state_index_2 = m_clip_text_encoder_with_projection->get_config().num_hidden_layers + 1;
+            ov::Tensor hidden_states = numpy_utils::concat(
+                m_clip_text_encoder->get_output_tensor(hidden_state_index_1),
+                m_clip_text_encoder_with_projection->get_output_tensor(hidden_state_index_2),
+                -1);
+            m_unet->set_hidden_states("encoder_hidden_states", numpy_utils::repeat(hidden_states, 2));
+            m_unet->set_hidden_states("text_embeds", numpy_utils::repeat(text_embeds, 2));
+
+            const float w = static_cast<float>(generation_config.width);
+            const float h = static_cast<float>(generation_config.height);
+            ov::Tensor time_ids(ov::element::f32, {2, 6});
+            const std::array<float, 6> values{w, h, 0.0f, 0.0f, w, h};
+            std::copy(values.begin(), values.end(), time_ids.data<float>());
+            std::copy(values.begin(), values.end(), time_ids.data<float>() + values.size());
+            m_unet->set_hidden_states("time_ids", time_ids);
+            return;
+        }
+
         const auto& unet_config = m_unet->get_config();
         const size_t batch_size_multiplier = m_unet->do_classifier_free_guidance(generation_config.guidance_scale) ? 2 : 1;  // Unet accepts 2x batch in case of CFG
 
@@ -405,6 +461,11 @@ public:
         }
     }
 
+protected:
+    size_t attentive_eraser_mask_blur_kernel() const override {
+        return 77;
+    }
+
     void export_model(const std::filesystem::path& export_path) override {
         m_unet->export_model(export_path / "unet");
         m_clip_text_encoder->export_model(export_path / "text_encoder");
@@ -443,6 +504,12 @@ private:
             }
         } else {
             OPENVINO_THROW("Unsupported class_name '", class_name, "'. Please, contact OpenVINO GenAI developers");
+        }
+
+        if (m_use_attentive_eraser) {
+            OPENVINO_ASSERT(m_pipeline_type == PipelineType::INPAINTING,
+                            "Attentive Eraser mode is available for inpainting pipelines only");
+            apply_attentive_eraser_defaults(m_generation_config);
         }
     }
 
@@ -483,6 +550,7 @@ private:
 
     bool m_force_zeros_for_empty_prompt = true;
     std::shared_ptr<CLIPTextModelWithProjection> m_clip_text_encoder_with_projection = nullptr;
+
 };
 
 }  // namespace genai
