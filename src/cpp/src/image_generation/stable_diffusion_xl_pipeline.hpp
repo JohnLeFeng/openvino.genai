@@ -235,13 +235,6 @@ public:
 
     }
 
-    ov::Tensor generate(const std::string& positive_prompt,
-                        ov::Tensor initial_image,
-                        ov::Tensor mask_image,
-                        const ov::AnyMap& properties) override {
-        return StableDiffusionPipeline::generate(positive_prompt, initial_image, mask_image, properties);
-    }
-
     std::shared_ptr<DiffusionPipeline> clone() override {
         OPENVINO_ASSERT(!m_root_dir.empty(), "Cannot clone pipeline without root directory");
 
