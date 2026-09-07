@@ -202,6 +202,16 @@ ov::Tensor UNet2DConditionModel::infer(ov::Tensor sample, ov::Tensor timestep) {
     return m_impl->infer(sample, timestep);
 }
 
+ov::Tensor UNet2DConditionModel::infer(
+    ov::Tensor sample,
+    ov::Tensor timestep,
+    const std::unordered_map<std::string, ov::Tensor>& additional_inputs) {
+    for (const auto& [name, tensor] : additional_inputs) {
+        set_hidden_states(name, tensor);
+    }
+    return infer(sample, timestep);
+}
+
 void UNet2DConditionModel::export_model(const std::filesystem::path& blob_path) {
     OPENVINO_ASSERT(m_impl, "UNet model must be compiled first. Cannot infer non-compiled model");
     m_impl->export_model(blob_path);

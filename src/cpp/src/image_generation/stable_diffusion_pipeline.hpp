@@ -431,29 +431,39 @@ public:
         latent_shape_cfg[0] *= batch_size_multiplier;
 
         ov::Tensor latent_cfg(ov::element::f32, latent_shape_cfg), denoised, noisy_residual_tensor(ov::element::f32, {}), latent_model_input;
+        ov::Tensor current_step_tensor, ss_steps_tensor, latent_pair, initial_noised;
+        std::unordered_map<std::string, ov::Tensor> unet_step_inputs;
+        size_t latent_batch_size = 0;
+        if (is_attentive) {
+            current_step_tensor = ov::Tensor(ov::element::i64, {});
+            unet_step_inputs.emplace("cur_step", current_step_tensor);
+            ss_steps_tensor = ov::Tensor(ov::element::i64, {});
+            *ss_steps_tensor.data<int64_t>() = static_cast<int64_t>(generation_config.attentive_eraser->ss_steps);
+            m_unet->set_hidden_states("ss_steps", ss_steps_tensor);
+            ov::Shape latent_pair_shape = latent.get_shape();
+            latent_batch_size = latent_pair_shape[0];
+            latent_pair_shape[0] *= 2;
+            latent_pair = ov::Tensor(latent.get_element_type(), latent_pair_shape);
+            initial_noised = ov::Tensor(image_latent.get_element_type(), image_latent.get_shape());
+            noisy_residual_tensor = ov::Tensor(ov::element::f32, latent.get_shape());
+        }
 
         for (size_t inference_step = 0; inference_step < timesteps.size(); inference_step++) {
             auto step_start = std::chrono::steady_clock::now();
 
             ov::Tensor noise_pred_tensor;
             if (is_attentive) {
-                ov::Tensor current_step(ov::element::i64, {});
-                *current_step.data<int64_t>() = static_cast<int64_t>(inference_step);
-                ov::Tensor ss_steps_tensor(ov::element::i64, {});
-                *ss_steps_tensor.data<int64_t>() = static_cast<int64_t>(generation_config.attentive_eraser->ss_steps);
-                m_unet->set_hidden_states("cur_step", current_step);
-                m_unet->set_hidden_states("ss_steps", ss_steps_tensor);
-
-                ov::Tensor latent_pair = numpy_utils::repeat(latent, 2);
-                ov::Tensor timestep(ov::element::i64, {});
-                *timestep.data<int64_t>() = timesteps[inference_step];
+                *current_step_tensor.data<int64_t>() = static_cast<int64_t>(inference_step);
+                numpy_utils::batch_copy(latent, latent_pair, 0, 0, latent_batch_size);
+                numpy_utils::batch_copy(latent, latent_pair, 0, latent_batch_size, latent_batch_size);
+                ov::Tensor timestep(ov::element::i64, {}, &timesteps[inference_step]);
                 auto infer_start = std::chrono::steady_clock::now();
-                ov::Tensor noise_pair = m_unet->infer(latent_pair, timestep);
+                ov::Tensor noise_pair = m_unet->infer(latent_pair, timestep, unet_step_inputs);
                 m_perf_metrics.raw_metrics.unet_inference_durations.emplace_back(
                     std::chrono::duration_cast<MicroSeconds>(std::chrono::steady_clock::now() - infer_start));
 
-                noisy_residual_tensor = apply_attentive_removal_guidance(
-                    noise_pair, generation_config.attentive_eraser->rm_guidance_scale);
+                apply_attentive_removal_guidance(
+                    noise_pair, generation_config.attentive_eraser->rm_guidance_scale, noisy_residual_tensor);
             } else {
                 numpy_utils::batch_copy(latent, latent_cfg, 0, 0, generation_config.num_images_per_prompt);
                 if (batch_size_multiplier > 1) {
@@ -492,7 +502,6 @@ public:
             latent = scheduler_step_result["latent"];
 
             if (is_attentive) {
-                ov::Tensor initial_noised(image_latent.get_element_type(), image_latent.get_shape());
                 image_latent.copy_to(initial_noised);
                 if (inference_step + 1 < timesteps.size()) {
                     m_scheduler->add_noise(initial_noised, noise, timesteps[inference_step + 1]);
@@ -544,7 +553,9 @@ public:
     }
 
 protected:
-    static ov::Tensor apply_attentive_removal_guidance(const ov::Tensor& noise_pair, float scale) {
+    static void apply_attentive_removal_guidance(const ov::Tensor& noise_pair,
+                                                 float scale,
+                                                 ov::Tensor result) {
         OPENVINO_ASSERT(noise_pair.get_element_type() == ov::element::f32 &&
                             noise_pair.get_shape().size() == 4,
                         "Noise prediction must be a rank-4 f32 tensor");
@@ -555,14 +566,15 @@ protected:
 
         ov::Shape output_shape = shape;
         output_shape[0] = 1;
-        ov::Tensor result(ov::element::f32, output_shape);
+        OPENVINO_ASSERT(result.get_element_type() == ov::element::f32 &&
+                            result.get_shape() == output_shape,
+                        "Removal guidance output must match the single-batch noise prediction shape");
         const float* without_mask = noise_pair.data<const float>();
         const float* with_mask = without_mask + result.get_size();
         float* destination = result.data<float>();
         for (size_t index = 0; index < result.get_size(); ++index) {
             destination[index] = without_mask[index] + scale * (with_mask[index] - without_mask[index]);
         }
-        return result;
     }
 
     static void blend_attentive_latents(const ov::Tensor& initial_noised,

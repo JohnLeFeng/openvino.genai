@@ -10,6 +10,9 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <type_traits>
+#include <unordered_map>
+#include <utility>
 
 #include "image_generation/schedulers/ddim.hpp"
 
@@ -30,6 +33,14 @@ public:
     }
 };
 
+using AdditionalUNetInputs = std::unordered_map<std::string, ov::Tensor>;
+static_assert(std::is_same_v<
+              decltype(std::declval<ov::genai::UNet2DConditionModel&>().infer(
+                  std::declval<ov::Tensor>(),
+                  std::declval<ov::Tensor>(),
+                  std::declval<const AdditionalUNetInputs&>())),
+              ov::Tensor>);
+
 TEST(AttentiveEraserTensorTest, ConvertsRgbMaskToGrayBeforeBinarizing) {
     const std::array<uint8_t, 12> pixels{255, 255, 255, 0, 0, 0, 255, 255, 255, 0, 0, 0};
     ov::Tensor mask(ov::element::u8, {1, 2, 2, 3}, const_cast<uint8_t*>(pixels.data()));
@@ -44,10 +55,13 @@ TEST(AttentiveEraserTensorTest, ConvertsRgbMaskToGrayBeforeBinarizing) {
 TEST(AttentiveEraserTensorTest, AppliesRemovalGuidance) {
     const std::array<float, 4> noise_values{1.0f, 2.0f, 3.0f, 6.0f};
     ov::Tensor noise_pair(ov::element::f32, {2, 1, 1, 2}, const_cast<float*>(noise_values.data()));
+    ov::Tensor guided(ov::element::f32, {1, 1, 1, 2});
+    float* guided_data = guided.data<float>();
 
-    ov::Tensor guided = AttentiveEraserPipelineTestAccessor::apply_attentive_removal_guidance(noise_pair, 2.0f);
+    AttentiveEraserPipelineTestAccessor::apply_attentive_removal_guidance(noise_pair, 2.0f, guided);
 
     EXPECT_EQ(guided.get_shape(), ov::Shape({1, 1, 1, 2}));
+    EXPECT_EQ(guided.data<float>(), guided_data);
     EXPECT_FLOAT_EQ(guided.data<const float>()[0], 5.0f);
     EXPECT_FLOAT_EQ(guided.data<const float>()[1], 10.0f);
 }
