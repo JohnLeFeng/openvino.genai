@@ -38,6 +38,12 @@ void CppStdGenerator::seed(size_t new_seed) {
     m_gen.seed(new_seed);
 }
 
+void AttentiveEraserConfig::validate() const {
+    OPENVINO_ASSERT(rm_guidance_scale > 0.0f, "rm_guidance_scale must be positive");
+    OPENVINO_ASSERT(mask_blur_kernel == 0 || mask_blur_kernel % 2 == 1,
+                    "mask_blur_kernel must be zero or a positive odd number");
+}
+
 //
 // GenerationConfig
 //
@@ -67,6 +73,7 @@ void ImageGenerationConfig::update_generation_config(const ov::AnyMap& propertie
     read_anymap_param(properties, "adapters", adapters);
     read_anymap_param(properties, "max_sequence_length", max_sequence_length);
     read_anymap_param(properties, "taylorseer_config", taylorseer_config);
+    read_anymap_param(properties, "attentive_eraser", attentive_eraser);
 
     // 'generator' has higher priority than 'seed' parameter
     const bool have_generator_param = properties.find(ov::genai::generator.name()) != properties.end();
@@ -94,6 +101,9 @@ void ImageGenerationConfig::validate() const {
     OPENVINO_ASSERT(guidance_scale > 1.0f || negative_prompt == std::nullopt, "Guidance scale <= 1.0 ignores negative prompt");
     OPENVINO_ASSERT(guidance_scale > 1.0f || negative_prompt_2 == std::nullopt, "Guidance scale <= 1.0 ignores negative prompt 2");
     OPENVINO_ASSERT(guidance_scale > 1.0f || negative_prompt_3 == std::nullopt, "Guidance scale <= 1.0 ignores negative prompt 3");
+    if (attentive_eraser) {
+        attentive_eraser->validate();
+    }
 }
 
 }  // namespace genai
