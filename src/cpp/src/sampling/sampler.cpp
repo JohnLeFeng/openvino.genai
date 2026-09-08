@@ -70,6 +70,27 @@ std::vector<Token> log_softmax(const ov::Tensor& logits, size_t batch_idx) {
     return tokens;
 }
 
+// Read a logits row as is, without modifying the scores.
+static std::vector<Token> read_row(const ov::Tensor& logits, const size_t batch_idx) {
+    const ov::Shape shape = logits.get_shape();
+    OPENVINO_ASSERT(shape.size() == 3);
+
+    size_t batch = shape[0], seq_len = shape[1], vocab_size = shape[2];
+    OPENVINO_ASSERT(batch_idx < batch, "Logits batch size doesn't match the number of beams");
+    OPENVINO_ASSERT(seq_len > 0);
+    OPENVINO_ASSERT(vocab_size > 0);
+
+    const size_t batch_offset = batch_idx * seq_len * vocab_size;
+    const size_t sequence_offset = (seq_len - 1) * vocab_size;
+    const float* beam_logits = logits.data<const float>() + batch_offset + sequence_offset;
+
+    std::vector<Token> tokens;
+    tokens.reserve(vocab_size);
+    for (size_t idx = 0; idx < vocab_size; ++idx)
+        tokens.push_back({beam_logits[idx], int64_t(idx)});
+    return tokens;
+}
+
 std::vector<int64_t> wrap_tokens(const std::vector<int64_t>& tokens, const std::vector<int64_t>& prefix_tokens, const std::vector<int64_t>& suffix_tokens) {
     std::vector<int64_t> all_tokens = prefix_tokens;
     all_tokens.insert(all_tokens.end(), tokens.begin(), tokens.end());
@@ -338,7 +359,10 @@ void Sampler::GroupBeamSearcher::select_next_tokens(const ov::Tensor& logits,
         std::vector<Beam> candidates;
         candidates.reserve(group_size * 2 * group_size);
         for (const Beam& beam : group.ongoing) {
-            std::vector<Token> tokens = log_softmax(logits, beam.m_global_beam_idx);
+            std::vector<Token> tokens =
+                m_sequence_group->get_logits_type() == LogitsType::LOG_PROBS
+                    ? read_row(logits, beam.m_global_beam_idx)
+                    : log_softmax(logits, beam.m_global_beam_idx);
 
             // apply diversity penalty
             for (auto prev_group_id = 0; prev_group_id < group_id; ++prev_group_id) {
@@ -627,7 +651,9 @@ Sampler::TreeSearcher::TreeSearcher(SequenceGroup::Ptr sequence_group, ov::Tenso
 }
 
 void Sampler::TreeSearcher::tree_reset() {
-    const size_t num_tree_nodes = m_parameters.num_assistant_tokens;
+    OPENVINO_ASSERT(m_parameters.num_assistant_tokens.has_value(),
+                    "num_assistant_tokens must be set for tree search.");
+    const size_t num_tree_nodes = m_parameters.num_assistant_tokens.value();
     OPENVINO_ASSERT(num_tree_nodes > 0,
                     "num_assistant_tokens must be greater than 0 for tree search, got ", num_tree_nodes);
     m_candidate_graph.emplace(-1, 0.0f, num_tree_nodes, m_parameters.tree_depth);
@@ -1566,6 +1592,14 @@ SequenceGroupSamplingInfo Sampler::sample_from_sequence_group(SequenceGroup::Ptr
                 } else {
                     const auto& sampling_params = sequence_group->get_sampling_parameters();
                     if (is_stop_token_id_hit(sampled_token.m_index, sampling_params.stop_token_ids) && !sampling_params.ignore_eos) {
+                        // Accepted stop token, discard draft candidates speculatively appended after it
+                        const size_t trailing_draft_tokens =
+                            generated_seq_token_offset > 0 ? generated_seq_token_offset - 1 : 0;
+                        if (trailing_draft_tokens > 0) {
+                            running_sequence->remove_last_tokens(trailing_draft_tokens);
+                            assisting_pipeline_info.max_removed_tokens_per_request =
+                                std::max(assisting_pipeline_info.max_removed_tokens_per_request, trailing_draft_tokens);
+                        }
                         running_sequence->set_status(SequenceStatus::FINISHED);
                         running_sequence->set_finish_reason(GenerationFinishReason::STOP);
                         sg_sampling_info.sampler_output.m_dropped_sequences.push_back(running_sequence->get_id());
@@ -1737,6 +1771,8 @@ SamplerOutput Sampler::sample(const std::vector<SequenceGroup::Ptr> & sequence_g
             // If there is a future assigned to a sequence group we read it's result (blocking if results not available yet)
             sg_sampling_info = sg_sampling_future_map[request_id].get();
             sampler_output.num_generated_tokens += sg_sampling_info.sampler_output.num_generated_tokens;
+            sampler_output.num_generated_tokens_per_request[request_id] =
+                sg_sampling_info.sampler_output.num_generated_tokens;
 
             // Merge sampler output from sequence group to the main one
             sampler_output.m_dropped_sequences.insert(
@@ -1752,6 +1788,10 @@ SamplerOutput Sampler::sample(const std::vector<SequenceGroup::Ptr> & sequence_g
                     forked_seq.second.end()
                 );
             }
+        } else {
+            // A scheduled request that does not require sampling is processing a
+            // prompt chunk and has not produced a generated token in this step.
+            sampler_output.num_generated_tokens_per_request[request_id] = 0;
         }
         // NOTE: it should be before 'get_num_scheduled_tokens' is used
         // update internal state of sequence group to reset scheduler tokens and update currently processed ones

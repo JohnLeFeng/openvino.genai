@@ -138,6 +138,8 @@ Recommended models: meta-llama/Llama-2-13b-hf as main model and TinyLlama/TinyLl
   | `branching_factor` | `1` | ContinuousBatching (EAGLE only) | Number of candidate tokens to consider at each tree level when running tree-based speculative decoding. |
   | `tree_depth` | `0` | ContinuousBatching (EAGLE only) | Depth of the candidate token tree. Tree drafting requires `num_assistant_tokens >= tree_depth`. |
 
+  The sample prints accepted, rejected, and total draft candidate tokens. Draft generated tokens count tokens sampled by the draft pipeline. Draft candidate tokens count the subset offered to the main model for validation and are used as the denominator for acceptance rate.
+
   Example:
   ```cpp
   ov::genai::GenerationConfig config;
@@ -196,10 +198,10 @@ For more information on how performance metrics are calculated please follow [pe
   ```
   #### Options
 - `-m, --model`: Path to the model and tokenizers base directory.
-- `-p, --prompt` (default: ''): The prompt to generate text. If without `-p` and `--pf`, the default prompt is `"The Sky is blue because"`
-- `--pf, --prompt_file` Read prompt from file.
-- `--nw, --num_warmup` (default: `1`): Number of warmup iterations.
-- `--mt, --max_new_tokens` (default: `20`): Maximal number of new tokens.
+- `-p, --prompt` (default: ''): The prompt to generate text. If without `-p` and `-F`, the default prompt is `"The Sky is blue because"`
+- `-F, --prompt_file` Read prompt from file.
+- `-N, --num_warmup` (default: `1`): Number of warmup iterations.
+- `-M, --max_new_tokens` (default: `20`): Maximal number of new tokens.
 - `-n, --num_iter` (default: `3`): Number of iterations.
 - `-d, --device` (default: `"CPU"`): Device to run the model on.
 

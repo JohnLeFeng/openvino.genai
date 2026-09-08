@@ -34,7 +34,6 @@ protected:
     std::deque<float> m_previous_step_cache_usages;
 
     // for perf metrics
-    float m_load_time_ms = 0.0f;
     size_t m_batch_size = 0; // stored number of processed tokens on last step
 
     // flag to enable validation mode for sampler
@@ -99,6 +98,20 @@ protected:
     void _compute_cache_rotation_data(const std::vector<SequenceGroup::Ptr>& sequence_groups, const Scheduler::Output& scheduler_output);
     void _prepare_rotation_data_storage(const SchedulerConfig& normalized_config, size_t embedding_size);
     void _set_adaptive_rkv_diversity_blocks(const SchedulerConfig& sched_config, const Scheduler::Output& scheduler_output);
+
+    void _validate_linear_verifier_constraints() const;
+
+    /// Reserves LA live + scratch rows for speculative verification.
+    void _reserve_linear_attention_scratch();
+
+    /// Commits speculative LA checkpoint transactions after sampling.
+    virtual void _commit_linear_attention_checkpoint_transactions(const Scheduler::Output& scheduler_output);
+
+    /// Mirrors the scheduler's cumulative speculative LA counters into the pipeline metrics.
+    void _publish_linear_attention_pool_metric();
+
+    /// Returns borrowed LA rows of every scheduled sequence to the pool (used on the failure path).
+    void _release_linear_attention_borrowed_rows(const Scheduler::Output& scheduler_output);
 
     virtual void drop_requests();
 

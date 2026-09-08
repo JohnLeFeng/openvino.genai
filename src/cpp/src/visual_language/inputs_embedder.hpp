@@ -35,6 +35,11 @@ struct NormalizedPrompt {
 class InputsEmbedder {
 public:
     InputsEmbedder(const std::filesystem::path& model_dir,
+                   const Tokenizer& tokenizer,
+                   const std::string& device,
+                   const ov::AnyMap device_config);
+
+    InputsEmbedder(const std::filesystem::path& model_dir,
                    const std::string& device,
                    const ov::AnyMap device_config);
 
@@ -82,6 +87,8 @@ public:
         const std::vector<ov::Tensor>& videos,
         const std::vector<VideoMetadata>& videos_metadata = {}
     );
+
+    void encode_audios(const std::vector<ov::Tensor>& audios);
 
     // compute position ids for language model input
     std::pair<ov::Tensor, std::optional<int64_t>> get_position_ids(const size_t inputs_embeds_size, const size_t history_size);
@@ -213,6 +220,8 @@ private:
             const std::vector<VideoMetadata>& videos_metadata = {}
         );
 
+        virtual void encode_audios(const std::vector<ov::Tensor>& audios) {}
+
         virtual std::pair<ov::Tensor, std::optional<int64_t>> get_position_ids(const size_t inputs_embeds_size, const size_t history_size);
         
         void set_position_ids(const ov::Tensor& position_ids) {
@@ -291,6 +300,7 @@ private:
         IInputsEmbedder(
             const VLMConfig& vlm_config,
             const std::filesystem::path& model_dir,
+            const Tokenizer& tokenizer,
             const std::string& device,
             const ov::AnyMap device_config);
 
@@ -341,6 +351,12 @@ private:
         */
         std::vector<ov::Tensor> to_single_image_tensors(const std::vector<ov::Tensor>& images);
 
+        ov::Tensor get_text_embedding(
+            EmbeddingsRequest& req,
+            const ov::Tensor& input_ids,
+            ov::genai::VLMPerfMetrics& metrics
+        );
+
         /**
          * @brief Check if CDPruner is available and enabled.
          * @return true if CDPruner processor exists, is available, and enabled (pruning_ratio > 0)
@@ -382,10 +398,13 @@ private:
     friend class InputsEmbedderQwen2_5_VL;
     friend class InputsEmbedderQwen3VL;
     friend class InputsEmbedderQwen3_5;
+    friend class InputsEmbedderQwen3Omni;
     friend class InputsEmbedderGemma3;
     friend class InputsEmbedderGemma3n;
     friend class InputsEmbedderGemma4;
+    friend class InputsEmbedderDeepseekOCR2;
     friend class InputsEmbedderVideoChatFlashQwen;
+    friend class InputsEmbedderMuseGlimmer;
 };
 
 template <typename Func>

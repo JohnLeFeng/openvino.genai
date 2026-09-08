@@ -201,6 +201,33 @@ class TextDivergency:
         return evaluate_divergency(self.tokenizer, gt, prediction)
 
 
+class TranscriptSimilarity:
+    """Corpus and per-sample similarity between reference and hypothesis transcriptions."""
+
+    def __init__(self, language: str = "") -> None:
+        self._character_level = language.strip().lower() in {"zh", "ja", "chinese", "japanese"}
+
+    def _similarity(self, reference, hypothesis):
+        from jiwer import cer, wer
+
+        error_rate = cer(reference, hypothesis) if self._character_level else wer(reference, hypothesis)
+        return max(0.0, 1.0 - float(error_rate))
+
+    def evaluate(self, gt, prediction):
+        from .utils import normalize_text
+
+        references = [normalize_text(str(x)) for x in gt["answers"].values]
+        hypotheses = [normalize_text(str(x)) for x in prediction["answers"].values]
+
+        per_prompt = [
+            self._similarity(reference, hypothesis)
+            for reference, hypothesis in tqdm(
+                zip(references, hypotheses), total=len(references), desc="Similarity evaluation"
+            )
+        ]
+        return {"similarity": self._similarity(references, hypotheses)}, {"similarity": per_prompt}
+
+
 # Image metrics
 def evaluate_image_similarity(processor, model, data_gold, data_prediction):
     images_gold = data_gold["images"].values
@@ -264,6 +291,11 @@ class EmbedsSimilarity:
 
             with open(prediction, "rb") as f:
                 prediction_data = np.load(f)
+
+            if gold_data.shape != prediction_data.shape:
+                raise ValueError(
+                    f"Embeds shape mismatch: {gold} has shape {gold_data.shape}, but {prediction} has shape {prediction_data.shape}"
+                )
 
             cos_sim_all = cosine_similarity(gold_data, prediction_data)
             cos_sim = np.diag(cos_sim_all)

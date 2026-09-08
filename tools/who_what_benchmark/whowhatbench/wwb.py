@@ -7,6 +7,7 @@ import numpy as np
 import logging
 import os
 from pathlib import Path
+from itertools import zip_longest
 
 from transformers import AutoTokenizer, AutoProcessor, AutoConfig
 import openvino as ov
@@ -20,7 +21,7 @@ from whowhatbench.model_loaders import load_model
 from whowhatbench import EVALUATOR_REGISTRY
 from whowhatbench.utils import fix_phi3_v_eos_token_id
 from whowhatbench.chat_visualtext_evaluator import VisualTextChatInput
-from whowhatbench.utils import get_json_config
+from whowhatbench.utils import get_json_config, load_audio_dataset
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -133,11 +134,15 @@ def parse_args():
             "speech-generation",
             "visual-text",
             "visual-text-chat",
+            "visual-text-only",
             "visual-video-text",
             "image-to-image",
             "image-inpainting",
             "text-embedding",
+            "image-embedding",
+            "video-embedding",
             "text-reranking",
+            "speech-recognition",
         ],
         default="text",
         help="Indicates the model type:\n"
@@ -145,6 +150,7 @@ def parse_args():
         "text-chat - for causal text generation in chat mode, \n"
         "visual-text - for Visual Language Models with image inputs, \n"
         "visual-text-chat - for Visual Language Models with image inputs in chat mode, \n"
+        "visual-text-only - for validating Visual Language Models with text-only prompts (no images/video), \n"
         "visual-video-text - for Visual Language Models with video inputs, \n"
         "text-to-image - for image generation, \n"
         "image-to-image - for image generation based on image and prompt, \n"
@@ -152,7 +158,11 @@ def parse_args():
         "text-to-video - for video generation, \n"
         "text-reranking - for reranking a list of texts based on relevance to query, \n"
         "text-embedding - for creation of embedding for a list of texts, \n"
-        "speech-generation - for text to speech generation ",
+        "image-embedding - for creation of embedding for a list of texts and images, \n"
+        "video-embedding - for creation of embedding for a list of texts and videos, \n"
+        "speech-generation - for text to speech generation, \n"
+        "speech-recognition - for speech to text generation, with native ASR models (FunASR) "
+        "or audio-capable multimodal models",
     )
     parser.add_argument(
         "--data-encoder",
@@ -168,13 +178,14 @@ def parse_args():
         default=None,
         help="Name of the dataset with prompts. The interface for dataset is load_dataset from datasets library."
         " Please provide this argument in format path,name (for example wikitext,wikitext-2-v1)."
-        " If None then internal list of prompts will be used.",
+        " If omitted, task-specific default dataset will be used.",
     )
     parser.add_argument(
         "--dataset-field",
         type=str,
-        default="text",
+        default=None,
         help="The name of field in dataset for prompts. For example question or context in squad."
+        " Defaults to 'text' for prompt-based tasks and to the audio column for speech-recognition."
         " Will be used only if dataset is defined.",
     )
     parser.add_argument(
@@ -407,16 +418,19 @@ def parse_args():
         "--speech-language",
         type=str,
         default="",
-        help="Speech-generation language code. This is currently used only for Kokoro. "
-        "If omitted, the default language used is 'en-us'.",
+        help="For speech-generation: language code, currently used only for Kokoro. "
+        "If omitted, the default language used is 'en-us'. \n"
+        "For speech-recognition: the language forced during transcription, in the form the model expects. "
+        "FunASR takes a code such as 'en', 'zh' or 'ja' and defaults to 'en'; audio VLMs take a name such as "
+        "'English' or 'Japanese' and default to 'English'.",
     )
     parser.add_argument(
         "--speech-voice",
         type=str,
         default="",
-        help="Speech-generation voice name (for example, af_heart for Kokoro). This is currently used only for Kokoro. \n"
-        "For other TTS models (such as SpeechT5), please use --speaker_embeddings parameter to specify the voice. "
-        "If omitted for Kokoro, the default voice used is 'af_heart'",
+        help="Speech-generation voice name (for example, af_heart for Kokoro or Ethan for Qwen3-Omni). \n"
+        "For SpeechT5, please use --speaker_embeddings parameter to specify the voice. "
+        "If omitted, WWB uses the model-specific default speaker/voice.",
     )
     parser.add_argument(
         "--tts-eval-whisper-model",
@@ -476,6 +490,16 @@ def check_args(args):
     if args.target_model is None and args.gt_data is None and args.target_data:
         raise ValueError(
             "Whether --target-model, --target-data or --gt-data should be provided")
+    if (
+        args.genai
+        and args.model_type == "text-to-image"
+        and args.device.upper().startswith("NPU")
+        and (args.image_size is None or args.image_size <= 0)
+    ):
+        raise ValueError(
+            "A positive --image-size must be provided for text-to-image GenAI evaluation on NPU "
+            "because the pipeline must be reshaped to static dimensions before compilation"
+        )
     if args.adapters is not None and args.alphas is not None and len(args.adapters) != len(args.alphas):
         raise ValueError(
             "If --adapters is provided and --alphas is provided, they should have the same length."
@@ -501,6 +525,9 @@ def check_args(args):
 
     if args.llamacpp_chat and not args.llamacpp:
         raise ValueError("--llamacpp-chat requires --llamacpp")
+
+    if args.dataset_field is None and args.model_type != "speech-recognition":
+        args.dataset_field = "text"
 
 
 def load_prompts(args):
@@ -733,6 +760,9 @@ def llamacpp_gen_text(
 
 def genai_gen_image(model, prompt, num_inference_steps, generator=None, empty_adapters=False):
     kwargs = {}
+    adapter_config = getattr(model, "adapter_config", None)
+    if adapter_config is not None:
+        kwargs["adapters"] = adapter_config
     if empty_adapters:
         import openvino_genai
         kwargs["adapters"] = openvino_genai.AdapterConfig()
@@ -812,24 +842,26 @@ def _is_voice_pack_enabled_model(model):
 
 
 def genai_gen_speech(model, prompt, speaker_embedding=None, language="", voice=""):
-    if speaker_embedding is not None and not isinstance(speaker_embedding, ov.Tensor):
-        speaker_embedding = ov.Tensor(np.array(speaker_embedding, dtype=np.float32).reshape(1, -1))
+    from whowhatbench.speech_generation_evaluator import GenAIOmniSpeechWrapper
 
-    generation_properties = {}
-    if isinstance(language, str) and language.strip():
-        generation_properties["language"] = language.strip().lower()
+    if isinstance(model, GenAIOmniSpeechWrapper):
+        # Omni takes a named voice — skip voice-pack .bin lookup and ov.Tensor coercion.
+        result = model.generate(prompt, speaker_embedding, language=language, voice=voice)
+    else:
+        if speaker_embedding is not None and not isinstance(speaker_embedding, ov.Tensor):
+            speaker_embedding = ov.Tensor(np.array(speaker_embedding, dtype=np.float32).reshape(1, -1))
 
-    selected_voice = voice.strip() if isinstance(voice, str) else ""
+        generation_properties = {}
+        if isinstance(language, str) and language.strip():
+            generation_properties["language"] = language.strip().lower()
 
-    # Only Kokoro voice-pack exports use named voice bins under <model_dir>/voices.
-    if _is_voice_pack_enabled_model(model) and speaker_embedding is None:
-        if not selected_voice:
-            selected_voice = "af_heart"
-
-        # Voice selection loads <model_dir>/voices/<voice>.bin.
-        voices_dir = Path(model.model_dir) / "voices"
-        voice_path = voices_dir / f"{selected_voice}.bin"
-        if voice_path.exists():
+        # Kokoro voice-pack exports select the voice by loading <model_dir>/voices/<voice>.bin
+        # and forwarding it as the speaker embedding.
+        if _is_voice_pack_enabled_model(model) and speaker_embedding is None:
+            selected_voice = voice.strip() if isinstance(voice, str) and voice.strip() else "af_heart"
+            voice_path = Path(model.model_dir) / "voices" / f"{selected_voice}.bin"
+            if not voice_path.exists():
+                raise ValueError(f"Voice embedding file does not exist: {voice_path}")
             speaker_data = np.fromfile(voice_path, dtype=np.float32)
             expected_shape = tuple(int(dim) for dim in model.get_speaker_embedding_shape())
             expected_flat_size = int(np.prod(expected_shape))
@@ -838,16 +870,16 @@ def genai_gen_speech(model, prompt, speaker_embedding=None, language="", voice="
                     f"Voice embedding file {voice_path} has {speaker_data.size} values; expected {expected_flat_size}."
                 )
             speaker_embedding = ov.Tensor(speaker_data.reshape(expected_shape))
-        else:
-            raise ValueError(f"Voice embedding file does not exist: {voice_path}")
 
-    result = model.generate(prompt, speaker_embedding, **generation_properties)
+        result = model.generate(prompt, speaker_embedding, **generation_properties)
+
     if len(result.speeches) != 1:
         raise ValueError(f"Expected exactly one generated waveform per prompt, got {len(result.speeches)}")
 
     speech = np.array(result.speeches[0].data).reshape(-1)
     sample_rate = int(getattr(result, "output_sample_rate", 16000))
-    return speech, sample_rate
+    text = getattr(result, "text", "") or ""
+    return speech, sample_rate, text
 
 
 def genai_gen_inpainting(model, prompt, image, mask, num_inference_steps, generator=None):
@@ -864,7 +896,17 @@ def genai_gen_inpainting(model, prompt, image, mask, num_inference_steps, genera
 
 
 def genai_gen_visual_text(
-    model, prompt, image, video, processor, tokenizer, max_new_tokens, crop_question, pruning_ratio, relevance_weight
+    model,
+    prompt,
+    image,
+    video,
+    processor,
+    tokenizer,
+    max_new_tokens,
+    crop_question,
+    pruning_ratio,
+    relevance_weight,
+    generation_config_extra=None,
 ):
     kwargs = {"do_sample": False, "max_new_tokens": max_new_tokens}
     if image is not None:
@@ -875,6 +917,8 @@ def genai_gen_visual_text(
         kwargs["pruning_ratio"] = pruning_ratio
     if relevance_weight is not None:
         kwargs["relevance_weight"] = relevance_weight
+    if generation_config_extra is not None:
+        kwargs.update(generation_config_extra)
 
     out = model.generate(
         prompt,
@@ -896,12 +940,15 @@ def genai_gen_visual_text_chat(
     _kv_axes_pos=None,
     _crop_question=None,
     _full_chat=None,
+    generation_config_extra=None,
 ):
     kwargs = {"do_sample": False, "max_new_tokens": max_new_tokens}
     if pruning_ratio is not None:
         kwargs["pruning_ratio"] = pruning_ratio
     if relevance_weight is not None:
         kwargs["relevance_weight"] = relevance_weight
+    if generation_config_extra is not None:
+        kwargs.update(generation_config_extra)
 
     import openvino_genai
 
@@ -925,9 +972,27 @@ def genai_gen_visual_text_chat(
     return answers
 
 
-def genai_gen_embedding(model, tokenizer, passages, **kwargs):
-    embeddings = model.embed_documents(passages)
-    return embeddings
+def genai_gen_embedding(model, tokenizer, processor, texts, images, videos, prompt, **kwargs):
+    text_input = []
+    if texts is not None:
+        text_input.append(texts)
+
+    media_inputs = {}
+
+    if prompt:
+        media_inputs["embedding_prompt"] = prompt
+
+    if images is not None:
+        media_inputs["images"] = []
+        for im in images:
+            media_inputs["images"].append(ov.Tensor(np.array(im)))
+
+    if videos is not None:
+        media_inputs["videos"] = []
+        for video in videos:
+            media_inputs["videos"].append(ov.Tensor(np.stack(video, axis=0)))
+
+    return np.asarray(model.embed(*text_input, **media_inputs).embeddings.data, dtype=np.float32)
 
 
 def genai_gen_reranking(model, tokenizer, query, documents):
@@ -951,7 +1016,7 @@ def create_evaluator(base_model, args):
 
     try:
         EvaluatorCLS = EVALUATOR_REGISTRY[task]
-        prompts = load_prompts(args)
+        prompts = load_prompts(args) if task != "speech-recognition" else None
 
         if task == "text":
             tokenizer = load_tokenizer(args) if not args.llamacpp else None
@@ -1030,7 +1095,7 @@ def create_evaluator(base_model, args):
                 speech_language=args.speech_language,
                 speech_voice=args.speech_voice,
             )
-        elif task == "visual-text" or task == "visual-video-text":
+        elif task == "visual-text" or task == "visual-video-text" or task == "visual-text-only":
             processor, config = load_processor(args)
             tokenizer = processor.tokenizer if hasattr(processor, "tokenizer") else load_tokenizer(args)
             if config and is_model_with_automatic_crop(config) and args.hf:
@@ -1047,11 +1112,15 @@ def create_evaluator(base_model, args):
                 max_new_tokens=args.max_new_tokens,
                 gen_answer_fn=genai_gen_visual_text if args.genai else None,
                 processor=processor,
+                config=config,
                 crop_question=crop_question,
                 task_type=task,
                 frames_num=args.video_frames_num,
                 pruning_ratio=args.pruning_ratio,
                 relevance_weight=args.relevance_weight,
+                generation_config_extra=args.generation_config_extra,
+                language=args.language,
+                long_prompt=(not args.short_prompt),
             )
         elif task == "image-to-image":
             return EvaluatorCLS(
@@ -1075,10 +1144,18 @@ def create_evaluator(base_model, args):
                 is_genai=args.genai,
                 seed=args.seed,
             )
-        elif task == "text-embedding":
+        elif task == "text-embedding" or task == "image-embedding" or task == "video-embedding":
+            if task == "image-embedding" or task == "video-embedding":
+                processor, config = load_processor(args)
+                tokenizer = processor.tokenizer if hasattr(processor, "tokenizer") else load_tokenizer(args)
+            else:
+                processor = None
+                tokenizer = load_tokenizer(args)
+
             return EvaluatorCLS(
                 base_model=base_model,
-                tokenizer=load_tokenizer(args),
+                processor=processor,
+                tokenizer=tokenizer,
                 gt_data=args.gt_data,
                 test_data=prompts,
                 num_samples=args.num_samples,
@@ -1087,6 +1164,7 @@ def create_evaluator(base_model, args):
                 normalize=args.embeds_normalize,
                 padding_side=args.embeds_padding_side,
                 batch_size=args.embeds_batch_size,
+                pipeline_type=args.model_type,
             )
         elif task == "text-reranking":
             return EvaluatorCLS(
@@ -1165,10 +1243,24 @@ def create_evaluator(base_model, args):
                 relevance_weight=args.relevance_weight,
                 crop_question=crop_question,
                 device=args.device,
+                generation_config_extra=args.generation_config_extra,
+            )
+        elif task == "speech-recognition":
+            needs_audio = args.base_model is not None or args.target_model is not None
+            return EvaluatorCLS(
+                base_model=base_model,
+                gt_data=args.gt_data,
+                test_data=load_audio_dataset(args) if needs_audio else None,
+                max_new_tokens=args.max_new_tokens,
+                num_samples=args.num_samples,
+                speech_language=args.speech_language,
             )
         else:
             raise ValueError(f"Unsupported task: {task}")
     except KeyError as e:
+        # A registered task means the KeyError came from the evaluator body, not this lookup.
+        if task in EVALUATOR_REGISTRY:
+            raise
         raise ValueError(
             f"Attempted to load evaluator for '{task}', but no evaluator for this model type found! "
             f"Supported model types: {', '.join(EVALUATOR_REGISTRY.keys())}. Details:\n",
@@ -1184,9 +1276,7 @@ def print_text_results(evaluator):
         ref_text = ""
         actual_text = ""
         diff = ""
-        for l1, l2 in zip(
-            e["source_model"].splitlines(), e["optimized_model"].splitlines()
-        ):
+        for l1, l2 in zip_longest(e["source_model"].splitlines(), e["optimized_model"].splitlines(), fillvalue=""):
             if l1 == "" and l2 == "":
                 continue
             ref_text += l1 + "\n"
@@ -1229,6 +1319,8 @@ def print_embeds_results(evaluator):
         logger.info(f"Top-{i+1} example:")
         logger.info("## Passages num:\n%s\n", len(e["passages"]))
         logger.info(f"## Similarity:\n{e['similarity']:.5}\n")
+        logger.info("## Source:\n%s\n", e["source_model"])
+        logger.info("## Optimized:\n%s\n", e["optimized_model"])
 
 
 def print_rag_results(evaluator):
@@ -1324,9 +1416,24 @@ def main():
         if "assistant_confidence_threshold" in validated:
             args.assistant_confidence_threshold = validated["assistant_confidence_threshold"]
             logger.info(f"assistant_confidence_threshold (final): {args.assistant_confidence_threshold}")
-        args.generation_config_extra = {
-            k: v for k, v in validated.items() if k not in ("num_assistant_tokens", "assistant_confidence_threshold")
-        }
+        if validated.get("num_assistant_tokens", 0) and validated.get("assistant_confidence_threshold", 0.0):
+            raise ValueError(
+                "Parameters 'assistant_confidence_threshold' and 'num_assistant_tokens' are mutually exclusive in --sd-generation-config"
+            )
+        if ("branching_factor" in validated or "tree_depth" in validated) and validated.get(
+            "assistant_confidence_threshold", 0.0
+        ):
+            raise ValueError(
+                "EAGLE3 mode (branching_factor/tree_depth) does not support assistant_confidence_threshold; set it to 0.0"
+            )
+        if args.model_type in ("text", "text-chat"):
+            args.generation_config_extra = {
+                k: v
+                for k, v in validated.items()
+                if k not in ("num_assistant_tokens", "assistant_confidence_threshold")
+            }
+        else:
+            args.generation_config_extra = dict(validated)
     else:
         args.generation_config_extra = {}
 
@@ -1356,11 +1463,13 @@ def main():
         else:
             kwargs["alphas"] = [1.0] * len(args.adapters)
     kwargs["empty_adapters"] = args.empty_adapters
-    if args.model_type == "text-embedding":
+    if args.model_type in ("text-embedding", "image-embedding", "video-embedding"):
         kwargs["embeds_pooling"] = args.embeds_pooling_type
         kwargs["embeds_normalize"] = args.embeds_normalize
         kwargs["embeds_padding_side"] = args.embeds_padding_side
         kwargs["embeds_batch_size"] = args.embeds_batch_size
+    if args.model_type == "text-to-image":
+        kwargs["image_size"] = args.image_size
 
     if args.draft_model is not None:
         kwargs["draft_model"] = args.draft_model
@@ -1385,6 +1494,9 @@ def main():
 
     if args.model_type == "speech-generation" and args.vocoder_path is not None:
         kwargs["vocoder_path"] = args.vocoder_path
+
+    if args.model_type == "speech-recognition":
+        kwargs["speech_language"] = args.speech_language
 
     kwargs["llamacpp_n_ctx"] = args.llamacpp_n_ctx
 
@@ -1468,7 +1580,15 @@ def main():
             evaluator.dump_predictions(os.path.join(args.output, "target.csv"))
 
     if args.verbose and (args.target_model or args.target_data):
-        if args.model_type in ["text", "text-chat", "visual-text", "visual-video-text", "visual-text-chat"]:
+        if args.model_type in [
+            "text",
+            "text-chat",
+            "visual-text",
+            "visual-video-text",
+            "visual-text-chat",
+            "speech-recognition",
+            "visual-text-only",
+        ]:
             print_text_results(evaluator)
         elif (
             "text-to-image" in args.model_type
@@ -1478,7 +1598,7 @@ def main():
             print_image_results(evaluator)
         elif args.model_type in ["speech-generation"]:
             print_speech_results(evaluator)
-        elif args.model_type in ['text-embedding']:
+        elif args.model_type in ["text-embedding", "video-embedding", "image-embedding"]:
             print_embeds_results(evaluator)
         elif args.model_type in ['text-reranking']:
             print_rag_results(evaluator)

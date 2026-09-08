@@ -33,6 +33,13 @@ struct ASRDecodedResultChunk {
 struct OPENVINO_GENAI_EXPORTS ASRDecodedResults {
     std::vector<std::string> texts;
     std::vector<float> scores;
+    /**
+     * @brief Language associated with each transcription.
+     *
+     * Each entry contains the detected language when the model supports language identification, or the requested
+     * language when generation forces one. An entry is empty when no language was requested and the model does not
+     * support language identification, as with Fun-ASR.
+     */
     std::vector<std::string> languages;
     ASRPerfMetrics perf_metrics;
 
@@ -81,7 +88,7 @@ public:
     ~ASRPipeline();
 
     ASRDecodedResults generate(const AudioInputs& audio_inputs,
-                               std::optional<ASRGenerationConfig> generation_config = std::nullopt,
+                               const std::optional<ASRGenerationConfig>& generation_config = std::nullopt,
                                StreamerVariant streamer = std::monostate());
 
     template <typename... Properties>

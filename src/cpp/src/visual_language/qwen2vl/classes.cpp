@@ -630,18 +630,22 @@ std::unique_ptr<CircularBufferQueue<ov::InferRequest>> create_vision_encoder_ire
     const std::shared_ptr<ov::Model>& model_org,
     const ProcessorConfig& processor_config,
     const std::string& device,
-    const ov::AnyMap& config) {
-    std::vector<float> a_image_mean(processor_config.image_mean.begin(), processor_config.image_mean.end());
-    std::vector<float> a_image_scale(processor_config.image_std.begin(), processor_config.image_std.end());
-    for (auto& v : a_image_mean)
-        v *= 255.0f;
-    for (auto& v : a_image_scale)
-        v = 1.0f / (v * 255.0f);
+    const ov::AnyMap& config,
+    const bool use_ov_vision_preprocess) {
+    std::shared_ptr<ov::Model> model = model_org;
+    if (use_ov_vision_preprocess) {
+        std::vector<float> a_image_mean(processor_config.image_mean.begin(), processor_config.image_mean.end());
+        std::vector<float> a_image_scale(processor_config.image_std.begin(), processor_config.image_std.end());
+        for (auto& v : a_image_mean)
+            v *= 255.0f;
+        for (auto& v : a_image_scale)
+            v = 1.0f / (v * 255.0f);
 
-    auto image_mean = ov::op::v0::Constant(ov::element::f32, ov::Shape{1, a_image_mean.size(), 1, 1}, a_image_mean.data());
-    auto image_scale = ov::op::v0::Constant(ov::element::f32, ov::Shape{1, a_image_scale.size(), 1, 1}, a_image_scale.data());
+        auto image_mean = ov::op::v0::Constant(ov::element::f32, ov::Shape{1, a_image_mean.size(), 1, 1}, a_image_mean.data());
+        auto image_scale = ov::op::v0::Constant(ov::element::f32, ov::Shape{1, a_image_scale.size(), 1, 1}, a_image_scale.data());
+        model = patch_preprocess_into_model(model, image_mean, image_scale);
+    }
 
-    auto model = patch_preprocess_into_model(model_org, image_mean, image_scale);
     auto compiled_model = utils::singleton_core().compile_model(
         model, device, utils::get_model_properties(config, "vision_embeddings", device));
     ov::genai::utils::print_compiled_model_properties(compiled_model, "VLM vision embeddings model");
@@ -660,27 +664,31 @@ bool check_vision_preprocess_env() {
 VisionEncoderQwen2VL::VisionEncoderQwen2VL(const std::filesystem::path& model_dir,
                                            const std::string& device,
                                            const ov::AnyMap properties)
-    : VisionEncoder(model_dir, device, properties),
+    : VisionEncoder(model_dir, ConfigOnlyTag{}),
       use_ov_vision_preprocess(check_vision_preprocess_env()) {
-    if (use_ov_vision_preprocess) {
-        auto model_org = utils::singleton_core().read_model(model_dir / "openvino_vision_embeddings_model.xml");
-        m_ireq_queue_vision_encoder = create_vision_encoder_ireq(model_org, m_processor_config, device, properties);
-    }
+    auto model_org = utils::singleton_core().read_model(model_dir / "openvino_vision_embeddings_model.xml");
+    m_ireq_queue_vision_encoder = create_vision_encoder_ireq(
+        model_org, m_processor_config, device, properties, use_ov_vision_preprocess);
 }
 
 VisionEncoderQwen2VL::VisionEncoderQwen2VL(const ModelsMap& models_map,
                                            const std::filesystem::path& config_dir_path,
                                            const std::string& device,
                                            const ov::AnyMap properties)
-    : VisionEncoder(models_map, config_dir_path, device, properties),
+    : VisionEncoder(models_map, config_dir_path, ConfigOnlyTag{}),
       use_ov_vision_preprocess(check_vision_preprocess_env()) {
-    if (use_ov_vision_preprocess) {
-        const auto& [vision_encoder_model, vision_encoder_weights] =
-            utils::get_model_weights_pair(models_map, "vision_embeddings");
-        auto model_org = utils::singleton_core().read_model(vision_encoder_model, vision_encoder_weights);
-        m_ireq_queue_vision_encoder = create_vision_encoder_ireq(model_org, m_processor_config, device, properties);
-    }
+    const auto& [vision_encoder_model, vision_encoder_weights] =
+        utils::get_model_weights_pair(models_map, "vision_embeddings");
+    auto model_org = utils::singleton_core().read_model(vision_encoder_model, vision_encoder_weights);
+    m_ireq_queue_vision_encoder = create_vision_encoder_ireq(
+        model_org, m_processor_config, device, properties, use_ov_vision_preprocess);
 }
+
+VisionEncoderQwen2VL::VisionEncoderQwen2VL(const std::filesystem::path& config_dir, ConfigOnlyTag)
+    : VisionEncoder(config_dir, ConfigOnlyTag{}) {}
+
+VisionEncoderQwen2VL::VisionEncoderQwen2VL(const ModelsMap& models_map, const std::filesystem::path& config_dir, ConfigOnlyTag)
+    : VisionEncoder(models_map, config_dir, ConfigOnlyTag{}) {}
 
 // keep both implementations for comparison and testing, here is the cpp version
 void VisionEncoderQwen2VL::encode_with_imagepreprocess_cpp(const std::vector<ov::Tensor>& images,
@@ -932,25 +940,29 @@ void VisionEncoderQwen2VL::encode_frames_with_config(
 InputsEmbedderQwen2VL::InputsEmbedderQwen2VL(
     const VLMConfig& vlm_config,
     const std::filesystem::path& model_dir,
+    const Tokenizer& tokenizer,
     const std::string& device,
     const ov::AnyMap device_config) :
-    IInputsEmbedder(vlm_config, model_dir, device, device_config) {
-    auto model = utils::singleton_core().read_model(model_dir / "openvino_vision_embeddings_merger_model.xml");
-    utils::request_vl_sdpa_transformations(model);
+    IInputsEmbedder(vlm_config, model_dir, tokenizer, device, device_config) {
+    auto merger_path = model_dir / "openvino_vision_embeddings_merger_model.xml";
+    if (std::filesystem::exists(merger_path)) {
+        auto model = utils::singleton_core().read_model(merger_path);
+        utils::request_vl_sdpa_transformations(model);
 
-    auto compiled_model = utils::singleton_core().compile_model(
-        model, device, utils::get_model_properties(device_config, "vision_embeddings_merger", device));
+        auto compiled_model = utils::singleton_core().compile_model(
+            model, device, utils::get_model_properties(device_config, "vision_embeddings_merger", device));
 
-    m_with_cu_seqlens_input = utils::check_vl_sdpa_transformations(compiled_model);
-    ov::genai::utils::print_compiled_model_properties(compiled_model,
-        m_with_cu_seqlens_input ? "VLM vision embeddings merger model with VLSDPA optimization ENABLED" :
-        "VLM vision embeddings merger model with VLSDPA optimization DISABLED");
+        m_with_cu_seqlens_input = utils::check_vl_sdpa_transformations(compiled_model);
+        ov::genai::utils::print_compiled_model_properties(compiled_model,
+            m_with_cu_seqlens_input ? "VLM vision embeddings merger model with VLSDPA optimization ENABLED" :
+            "VLM vision embeddings merger model with VLSDPA optimization DISABLED");
 
-    m_ireq_queue_vision_embeddings_merger = std::make_unique<CircularBufferQueue<ov::InferRequest>>(
-        compiled_model.get_property(ov::optimal_number_of_infer_requests),
-        [&compiled_model]() -> ov::InferRequest {
-            return compiled_model.create_infer_request();
-        });
+        m_ireq_queue_vision_embeddings_merger = std::make_unique<CircularBufferQueue<ov::InferRequest>>(
+            compiled_model.get_property(ov::optimal_number_of_infer_requests),
+            [&compiled_model]() -> ov::InferRequest {
+                return compiled_model.create_infer_request();
+            });
+    }
 
     encode_vision_placeholder_tokens();
 
@@ -965,24 +977,26 @@ InputsEmbedderQwen2VL::InputsEmbedderQwen2VL(
     const std::string& device,
     const ov::AnyMap device_config) :
     IInputsEmbedder(vlm_config, models_map, tokenizer, config_dir_path, device, device_config) {
-    auto model = utils::singleton_core().read_model(
-        utils::get_model_weights_pair(models_map, "vision_embeddings_merger").first,
-        utils::get_model_weights_pair(models_map, "vision_embeddings_merger").second);
-    utils::request_vl_sdpa_transformations(model);
+    if (models_map.count("vision_embeddings_merger")) {
+        auto model = utils::singleton_core().read_model(
+            utils::get_model_weights_pair(models_map, "vision_embeddings_merger").first,
+            utils::get_model_weights_pair(models_map, "vision_embeddings_merger").second);
+        utils::request_vl_sdpa_transformations(model);
 
-    auto compiled_model = utils::singleton_core().compile_model(
-        model, device, utils::get_model_properties(device_config, "vision_embeddings_merger", device));
+        auto compiled_model = utils::singleton_core().compile_model(
+            model, device, utils::get_model_properties(device_config, "vision_embeddings_merger", device));
 
-    m_with_cu_seqlens_input = utils::check_vl_sdpa_transformations(compiled_model);
-    ov::genai::utils::print_compiled_model_properties(compiled_model,
-        m_with_cu_seqlens_input ? "VLM vision embeddings merger model with VLSDPA optimization ENABLED" :
-        "VLM vision embeddings merger model with VLSDPA optimization DISABLED");
+        m_with_cu_seqlens_input = utils::check_vl_sdpa_transformations(compiled_model);
+        ov::genai::utils::print_compiled_model_properties(compiled_model,
+            m_with_cu_seqlens_input ? "VLM vision embeddings merger model with VLSDPA optimization ENABLED" :
+            "VLM vision embeddings merger model with VLSDPA optimization DISABLED");
 
-    m_ireq_queue_vision_embeddings_merger = std::make_unique<CircularBufferQueue<ov::InferRequest>>(
-        compiled_model.get_property(ov::optimal_number_of_infer_requests),
-        [&compiled_model]() -> ov::InferRequest {
-            return compiled_model.create_infer_request();
-        });
+        m_ireq_queue_vision_embeddings_merger = std::make_unique<CircularBufferQueue<ov::InferRequest>>(
+            compiled_model.get_property(ov::optimal_number_of_infer_requests),
+            [&compiled_model]() -> ov::InferRequest {
+                return compiled_model.create_infer_request();
+            });
+    }
 
     encode_vision_placeholder_tokens();
 
@@ -1124,7 +1138,7 @@ ov::Tensor InputsEmbedderQwen2VL::get_inputs_embeds(const std::string& unified_p
     ov::Tensor input_ids = get_encoded_input_ids(unified_prompt, metrics);
     CircularBufferQueueElementGuard<EmbeddingsRequest> embeddings_request_guard(m_embedding->get_request_queue().get());
     EmbeddingsRequest& req = embeddings_request_guard.get();
-    ov::Tensor text_embeds = m_embedding->infer(req, input_ids);
+    ov::Tensor text_embeds = get_text_embedding(req, input_ids, metrics);
 
     int64_t vision_start_token_id = m_vision_token_ids["vision_start"];
     int64_t vision_end_token_id = m_vision_token_ids["vision_end"];
