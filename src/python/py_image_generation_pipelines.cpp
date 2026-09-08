@@ -365,11 +365,13 @@ void init_image_generation_pipelines(py::module_& m) {
         .value("STANDARD", ov::genai::InpaintingMode::STANDARD)
         .value("ATTENTIVE_ERASER", ov::genai::InpaintingMode::ATTENTIVE_ERASER);
 
-    py::class_<ov::genai::AttentiveEraserConfig>(m, "AttentiveEraserConfig")
+    py::class_<ov::genai::AttentiveEraserConfig>(m, "AttentiveEraserConfig", "Runtime controls for SD1.5 Attentive Eraser generation.")
         .def(py::init<>())
-        .def_readwrite("rm_guidance_scale", &ov::genai::AttentiveEraserConfig::rm_guidance_scale)
-        .def_readwrite("ss_steps", &ov::genai::AttentiveEraserConfig::ss_steps)
-        .def_readwrite("mask_blur_kernel", &ov::genai::AttentiveEraserConfig::mask_blur_kernel)
+        .def_readwrite("rm_guidance_scale", &ov::genai::AttentiveEraserConfig::rm_guidance_scale, "Removal guidance scale; must be positive.")
+        .def_readwrite("ss_steps", &ov::genai::AttentiveEraserConfig::ss_steps, "Last denoising step that applies softmax scaling, inclusive.")
+        .def_readwrite("start_step", &ov::genai::AttentiveEraserConfig::start_step, "First denoising step that applies AAS, inclusive.")
+        .def_readwrite("ss_scale", &ov::genai::AttentiveEraserConfig::ss_scale, "Foreground softmax-logit scale in (0, 1].")
+        .def_readwrite("mask_blur_kernel", &ov::genai::AttentiveEraserConfig::mask_blur_kernel, "Odd Gaussian mask-blur kernel size; zero selects the pipeline default.")
         .def("validate", &ov::genai::AttentiveEraserConfig::validate);
 
     py::class_<ov::genai::ImageGenerationConfig>(m, "ImageGenerationConfig", "This class is used for storing generation config for image generation pipeline.")

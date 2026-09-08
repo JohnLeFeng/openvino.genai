@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cassert>
 #include <iostream>
 #include <memory>
@@ -10,6 +11,7 @@
 
 #include "image_generation/attentive_eraser_utils.hpp"
 #include "image_generation/diffusion_pipeline.hpp"
+#include "image_generation/models/attentive_eraser_aas.hpp"
 #include "image_generation/threaded_callback.hpp"
 
 #include "openvino/genai/image_generation/clip_text_model.hpp"
@@ -87,6 +89,8 @@ public:
         StableDiffusionPipeline(pipeline_type) {
         m_root_dir = root_dir;
         m_use_attentive_eraser = use_attentive_eraser;
+        OPENVINO_ASSERT(!m_use_attentive_eraser || properties.find(ov::genai::blob_path.name()) == properties.end(),
+                "Attentive Eraser mode does not support compiled model blobs");
         const std::filesystem::path model_index_path = root_dir / "model_index.json";
         std::ifstream file(model_index_path);
         OPENVINO_ASSERT(file.is_open(), "Failed to open ", model_index_path);
@@ -109,7 +113,11 @@ public:
 
         const std::string unet = data["unet"][1].get<std::string>();
         if (unet == "UNet2DConditionModel") {
-            m_unet = std::make_shared<UNet2DConditionModel>(root_dir / "unet", device, *updated_properties);
+            auto unet_properties = *updated_properties;
+            if (m_use_attentive_eraser) {
+                unet_properties[ATTENTIVE_ERASER_AAS_LAYERS] = std::vector<size_t>{7, 8, 9, 10, 11, 12, 13, 14, 15};
+            }
+            m_unet = std::make_shared<UNet2DConditionModel>(root_dir / "unet", device, unet_properties);
         } else {
             OPENVINO_THROW("Unsupported '", unet, "' UNet type");
         }
@@ -189,11 +197,17 @@ public:
         const std::string& denoise_device,
         const std::string& vae_device,
         const ov::AnyMap& properties) override {
+        OPENVINO_ASSERT(!m_use_attentive_eraser || properties.find(ov::genai::blob_path.name()) == properties.end(),
+                        "Attentive Eraser mode does not support compiled model blobs");
         update_adapters_from_properties(properties, m_generation_config.adapters);
         auto updated_properties = update_adapters_in_properties(properties, &DiffusionPipeline::derived_adapters);
 
         m_clip_text_encoder->compile(text_encode_device, *updated_properties);
-        m_unet->compile(denoise_device, *updated_properties);
+        auto unet_properties = *updated_properties;
+        if (m_use_attentive_eraser) {
+            unet_properties[ATTENTIVE_ERASER_AAS_LAYERS] = std::vector<size_t>{7, 8, 9, 10, 11, 12, 13, 14, 15};
+        }
+        m_unet->compile(denoise_device, unet_properties);
         m_vae->compile(vae_device, *updated_properties);
 
     }
@@ -320,7 +334,7 @@ public:
     }
 
     void set_lora_adapters(std::optional<AdapterConfig> adapters) override {
-        if(adapters) {
+        if (adapters) {
             if(auto updated_adapters = derived_adapters(*adapters)) {
                 adapters = updated_adapters;
             }
@@ -378,6 +392,8 @@ public:
 
         if (is_attentive) {
             const int64_t model_image_size = static_cast<int64_t>(unet_config.sample_size * vae_scale_factor);
+            OPENVINO_ASSERT(model_image_size == 512,
+                            "Attentive eraser mode supports only 512x512 Stable Diffusion 1.5 UNets");
             OPENVINO_ASSERT(generation_config.height == model_image_size &&
                                 generation_config.width == model_image_size,
                             "Attentive eraser height and width must match the UNet image size of ",
@@ -416,8 +432,13 @@ public:
                     resized_mask,
                     configured_kernel == 0 ? attentive_eraser_mask_blur_kernel() : configured_kernel,
                     0.1f);
+                const float* mask_data = full_resolution_mask.data<const float>();
+                OPENVINO_ASSERT(std::any_of(mask_data,
+                                            mask_data + full_resolution_mask.get_size(),
+                                            [](float value) { return value == 0.0f; }),
+                                "Attentive eraser mask must contain at least one unmasked pixel");
                 latent_mask = max_pool_mask(full_resolution_mask, vae_scale_factor);
-                m_unet->set_hidden_states("mask", full_resolution_mask);
+                m_unet->set_hidden_states("aas_mask", full_resolution_mask);
                 // start from noised image latent instead of pure noise
                 image_latent.copy_to(latent);
                 m_scheduler->add_noise(latent, noise, timesteps.front());
@@ -431,15 +452,24 @@ public:
         latent_shape_cfg[0] *= batch_size_multiplier;
 
         ov::Tensor latent_cfg(ov::element::f32, latent_shape_cfg), denoised, noisy_residual_tensor(ov::element::f32, {}), latent_model_input;
-        ov::Tensor current_step_tensor, ss_steps_tensor, latent_pair, initial_noised;
-        std::unordered_map<std::string, ov::Tensor> unet_step_inputs;
+        ov::Tensor latent_pair, initial_noised;
         size_t latent_batch_size = 0;
         if (is_attentive) {
-            current_step_tensor = ov::Tensor(ov::element::i64, {});
-            unet_step_inputs.emplace("cur_step", current_step_tensor);
-            ss_steps_tensor = ov::Tensor(ov::element::i64, {});
-            *ss_steps_tensor.data<int64_t>() = static_cast<int64_t>(generation_config.attentive_eraser->ss_steps);
-            m_unet->set_hidden_states("ss_steps", ss_steps_tensor);
+            if (!m_aas_runtime_scalars_bound) {
+                m_aas_active_tensor = ov::Tensor(ov::element::f32, {});
+                m_ss_active_tensor = ov::Tensor(ov::element::f32, {});
+                m_ss_scale_tensor = ov::Tensor(ov::element::f32, {});
+                m_unet->set_hidden_states("aas_active", m_aas_active_tensor);
+                m_unet->set_hidden_states("ss_active", m_ss_active_tensor);
+                m_unet->set_hidden_states("ss_scale", m_ss_scale_tensor);
+                m_aas_runtime_scalars_bound = true;
+            }
+            *m_aas_active_tensor.data<float>() = 0.0f;
+            *m_ss_active_tensor.data<float>() = 0.0f;
+            if (!m_bound_ss_scale.has_value() || *m_bound_ss_scale != generation_config.attentive_eraser->ss_scale) {
+                *m_ss_scale_tensor.data<float>() = generation_config.attentive_eraser->ss_scale;
+                m_bound_ss_scale = generation_config.attentive_eraser->ss_scale;
+            }
             ov::Shape latent_pair_shape = latent.get_shape();
             latent_batch_size = latent_pair_shape[0];
             latent_pair_shape[0] *= 2;
@@ -453,12 +483,22 @@ public:
 
             ov::Tensor noise_pred_tensor;
             if (is_attentive) {
-                *current_step_tensor.data<int64_t>() = static_cast<int64_t>(inference_step);
+                const bool aas_active = is_attentive_eraser_aas_active(
+                    inference_step,
+                    generation_config.attentive_eraser->start_step,
+                    generation_config.strength,
+                    generation_config.num_inference_steps);
+                *m_aas_active_tensor.data<float>() = aas_active ? 1.0f : 0.0f;
+                *m_ss_active_tensor.data<float>() = is_attentive_eraser_ss_active(
+                                                        inference_step,
+                                                        generation_config.attentive_eraser->ss_steps)
+                                                        ? 1.0f
+                                                        : 0.0f;
                 numpy_utils::batch_copy(latent, latent_pair, 0, 0, latent_batch_size);
                 numpy_utils::batch_copy(latent, latent_pair, 0, latent_batch_size, latent_batch_size);
-                ov::Tensor timestep(ov::element::i64, {}, &timesteps[inference_step]);
+                ov::Tensor timestep(ov::element::i64, {1}, &timesteps[inference_step]);
                 auto infer_start = std::chrono::steady_clock::now();
-                ov::Tensor noise_pair = m_unet->infer(latent_pair, timestep, unet_step_inputs);
+                ov::Tensor noise_pair = m_unet->infer(latent_pair, timestep);
                 m_perf_metrics.raw_metrics.unet_inference_durations.emplace_back(
                     std::chrono::duration_cast<MicroSeconds>(std::chrono::steady_clock::now() - infer_start));
 
@@ -710,6 +750,11 @@ protected:
 
     // Attentive eraser support
     bool m_use_attentive_eraser = false;
+    bool m_aas_runtime_scalars_bound = false;
+    ov::Tensor m_aas_active_tensor;
+    ov::Tensor m_ss_active_tensor;
+    ov::Tensor m_ss_scale_tensor;
+    std::optional<float> m_bound_ss_scale;
 };
 
 }  // namespace genai

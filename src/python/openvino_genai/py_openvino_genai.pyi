@@ -2179,24 +2179,42 @@ class Image2ImagePipeline:
     def set_scheduler(self, scheduler: Scheduler) -> None:
         ...
 class AttentiveEraserConfig:
+    """Runtime controls for SD1.5 Attentive Eraser generation."""
     def __init__(self) -> None:
         ...
     def validate(self) -> None:
         ...
     @property
     def mask_blur_kernel(self) -> int:
+        """Odd Gaussian mask-blur kernel size; zero selects the pipeline default."""
         ...
     @mask_blur_kernel.setter
     def mask_blur_kernel(self, arg0: typing.SupportsInt) -> None:
         ...
     @property
     def rm_guidance_scale(self) -> float:
+        """Removal guidance scale; must be positive."""
         ...
     @rm_guidance_scale.setter
     def rm_guidance_scale(self, arg0: typing.SupportsFloat) -> None:
         ...
     @property
+    def ss_scale(self) -> float:
+        """Foreground softmax-logit scale in (0, 1]."""
+        ...
+    @ss_scale.setter
+    def ss_scale(self, arg0: typing.SupportsFloat) -> None:
+        ...
+    @property
+    def start_step(self) -> int:
+        """First denoising step that applies AAS, inclusive."""
+        ...
+    @start_step.setter
+    def start_step(self, arg0: typing.SupportsInt) -> None:
+        ...
+    @property
     def ss_steps(self) -> int:
+        """Last denoising step that applies softmax scaling, inclusive."""
         ...
     @ss_steps.setter
     def ss_steps(self, arg0: typing.SupportsInt) -> None:

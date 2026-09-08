@@ -78,6 +78,8 @@ private:
 struct OPENVINO_GENAI_EXPORTS AttentiveEraserConfig {
     float rm_guidance_scale = 9.0f;
     size_t ss_steps = 9;
+    size_t start_step = 0;
+    float ss_scale = 0.3f;
     size_t mask_blur_kernel = 0;
 
     void validate() const;

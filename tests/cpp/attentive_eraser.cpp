@@ -126,7 +126,7 @@ TEST_P(UnsupportedAttentiveEraserPipelineTest, RejectsUnsupportedModelFamily) {
         FAIL() << "Expected Attentive Eraser to reject " << class_name;
     } catch (const ov::Exception& error) {
         EXPECT_NE(std::string(error.what()).find(
-                      "Attentive Eraser mode requires a 4-channel SD1.5, SD2, or SDXL pipeline"),
+                      "Attentive Eraser mode supports only Stable Diffusion 1.5 pipelines"),
                   std::string::npos);
     }
 
@@ -138,6 +138,7 @@ INSTANTIATE_TEST_SUITE_P(
     UnsupportedAttentiveEraserPipelineTest,
     testing::Values("LatentConsistencyModelPipeline",
                     "StableDiffusionInpaintPipeline",
+                    "StableDiffusionXLPipeline",
                     "StableDiffusionXLInpaintPipeline",
                     "StableDiffusion3Pipeline",
                     "FluxPipeline",
@@ -165,6 +166,33 @@ TEST(AttentiveEraserConfigTest, ValidatesMaskBlurKernelOverride) {
 
     config.mask_blur_kernel = 8;
     EXPECT_THROW(config.validate(), ov::Exception);
+}
+
+TEST(AttentiveEraserConfigTest, ProvidesRuntimeAasDefaults) {
+    ov::genai::AttentiveEraserConfig config;
+
+    EXPECT_EQ(config.start_step, 0);
+    EXPECT_FLOAT_EQ(config.ss_scale, 0.3f);
+}
+
+TEST(AttentiveEraserConfigTest, ValidatesRuntimeAasControls) {
+    ov::genai::AttentiveEraserConfig config;
+    EXPECT_NO_THROW(config.validate());
+
+    config.ss_scale = 0.0f;
+    EXPECT_THROW(config.validate(), ov::Exception);
+
+    config.ss_scale = 1.01f;
+    EXPECT_THROW(config.validate(), ov::Exception);
+}
+
+TEST(AttentiveEraserConfigTest, UsesConfiguredAasStepBoundaries) {
+    EXPECT_FALSE(ov::genai::is_attentive_eraser_aas_active(3, 4, 0.8f, 50));
+    EXPECT_TRUE(ov::genai::is_attentive_eraser_aas_active(4, 4, 0.8f, 50));
+    EXPECT_TRUE(ov::genai::is_attentive_eraser_aas_active(39, 4, 0.8f, 50));
+    EXPECT_FALSE(ov::genai::is_attentive_eraser_aas_active(40, 4, 0.8f, 50));
+    EXPECT_TRUE(ov::genai::is_attentive_eraser_ss_active(9, 9));
+    EXPECT_FALSE(ov::genai::is_attentive_eraser_ss_active(10, 9));
 }
 
 }  // namespace
