@@ -6,6 +6,7 @@
 #include "image_generation/models/unet_inference_dynamic.hpp"
 #include "image_generation/models/unet_inference_static_bs1.hpp"
 
+#include <algorithm>
 #include <fstream>
 
 #include "json_utils.hpp"
@@ -27,6 +28,8 @@ UNet2DConditionModel::Config::Config(const std::filesystem::path& config_path) {
     read_json_param(data, "in_channels", in_channels);
     read_json_param(data, "sample_size", sample_size);
     read_json_param(data, "cross_attention_dim", cross_attention_dim);
+    read_json_param(data, "projection_class_embeddings_input_dim", projection_class_embeddings_input_dim);
+    read_json_param(data, "addition_embed_type", addition_embed_type);
     read_json_param(data, "time_cond_proj_dim", time_cond_proj_dim);
 }
 
@@ -128,9 +131,25 @@ UNet2DConditionModel& UNet2DConditionModel::compile(const std::string& device, c
         OPENVINO_ASSERT(!adapters, "Attentive Eraser AAS cannot be combined with LoRA adapters");
         OPENVINO_ASSERT(device == "CPU" || device == "GPU",
                         "Attentive Eraser AAS supports only CPU and GPU devices");
-        OPENVINO_ASSERT(m_config.in_channels == 4 && m_config.sample_size == 64 &&
-                            m_config.cross_attention_dim == 768 && m_vae_scale_factor == 8,
-                        "Attentive Eraser AAS supports only 512x512 Stable Diffusion 1.5 UNets");
+        const bool is_sd15 = m_config.in_channels == 4 && m_config.sample_size == 64 &&
+                             m_config.cross_attention_dim == 768 && m_vae_scale_factor == 8;
+        const bool is_sdxl_base = m_config.in_channels == 4 && m_config.sample_size == 128 &&
+                                  m_config.cross_attention_dim == 2048 && m_vae_scale_factor == 8 &&
+                                  m_config.addition_embed_type == "text_time" &&
+                                  m_config.projection_class_embeddings_input_dim == 2816;
+        OPENVINO_ASSERT(is_sd15 || is_sdxl_base,
+                        "Attentive Eraser AAS supports only 512x512 Stable Diffusion 1.5 or "
+                        "1024x1024 SDXL Base UNets");
+        if (is_sdxl_base) {
+            const auto has_model_input = [this](const std::string& name) {
+                const auto inputs = m_model->inputs();
+                return std::any_of(inputs.begin(), inputs.end(), [&name](const ov::Output<const ov::Node>& input) {
+                    return input.get_names().count(name) > 0;
+                });
+            };
+            OPENVINO_ASSERT(has_model_input("text_embeds") && has_model_input("time_ids"),
+                            "Attentive Eraser SDXL Base UNet requires text_embeds and time_ids inputs");
+        }
         const auto layer_indices = aas_iter->second.as<std::vector<size_t>>();
         plugin_properties.erase(aas_iter);
         apply_attentive_eraser_aas(m_model, layer_indices);

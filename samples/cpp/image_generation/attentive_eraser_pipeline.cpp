@@ -11,16 +11,17 @@
 #include "progress_bar.hpp"
 
 int32_t main(int32_t argc, char* argv[]) try {
-    OPENVINO_ASSERT(argc >= 4 && argc <= 6,
+    OPENVINO_ASSERT(argc >= 4 && argc <= 7,
                     "Usage: ",
                     argv[0],
-                    " <MODEL_DIR> <IMAGE> <MASK_IMAGE> [DEVICE] [SEED]");
+                    " <MODEL_DIR> <IMAGE> <MASK_IMAGE> [DEVICE] [SEED] [STEPS]");
 
     const std::string models_path = argv[1];
     const std::string image_path = argv[2];
     const std::string mask_image_path = argv[3];
     const std::string device = argc >= 5 ? argv[4] : "CPU";
-    const size_t seed = argc == 6 ? std::stoull(argv[5]) : 123;
+    const size_t seed = argc >= 6 ? std::stoull(argv[5]) : 123;
+    const size_t num_inference_steps = argc == 7 ? std::stoull(argv[6]) : 50;
 
     ov::AnyMap properties{
         ov::genai::inpainting_mode(ov::genai::InpaintingMode::ATTENTIVE_ERASER),
@@ -35,7 +36,7 @@ int32_t main(int32_t argc, char* argv[]) try {
     ov::Tensor mask_image = utils::load_image(mask_image_path);
 
     config.strength = 0.8f;
-    config.num_inference_steps = 50;
+    config.num_inference_steps = num_inference_steps;
     config.rng_seed = seed;
     config.attentive_eraser->rm_guidance_scale = 9.0f;
     config.attentive_eraser->ss_steps = 9;

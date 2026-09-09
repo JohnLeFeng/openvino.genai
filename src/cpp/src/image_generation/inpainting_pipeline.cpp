@@ -51,9 +51,10 @@ InpaintingPipeline::InpaintingPipeline(const std::filesystem::path& root_dir, co
         compile_properties.erase(mode_iter);
     }
 
-    const bool attentive_eraser_supported = class_name == "StableDiffusionPipeline";
+    const bool attentive_eraser_supported = class_name == "StableDiffusionPipeline" ||
+                                            class_name == "StableDiffusionXLPipeline";
     OPENVINO_ASSERT(mode != InpaintingMode::ATTENTIVE_ERASER || attentive_eraser_supported,
-                    "Attentive Eraser mode supports only Stable Diffusion 1.5 pipelines");
+                    "Attentive Eraser mode supports only Stable Diffusion 1.5 and SDXL Base pipelines");
 
     auto start_time = std::chrono::steady_clock::now();
     if (class_name == "StableDiffusionPipeline" ||

@@ -102,7 +102,9 @@ public:
             root_dir / "scheduler/scheduler_config.json",
             m_use_attentive_eraser ? Scheduler::Type::DDIM : Scheduler::Type::AUTO));
 
-        auto updated_properties = update_adapters_in_properties(properties, &DiffusionPipeline::derived_adapters);
+        auto component_properties = properties;
+        const auto aas_layers = extract_attentive_eraser_aas_layers(component_properties);
+        auto updated_properties = update_adapters_in_properties(component_properties, &DiffusionPipeline::derived_adapters);
 
         const std::string text_encoder = data["text_encoder"][1].get<std::string>();
         if (text_encoder == "CLIPTextModel") {
@@ -115,7 +117,7 @@ public:
         if (unet == "UNet2DConditionModel") {
             auto unet_properties = *updated_properties;
             if (m_use_attentive_eraser) {
-                unet_properties[ATTENTIVE_ERASER_AAS_LAYERS] = std::vector<size_t>{7, 8, 9, 10, 11, 12, 13, 14, 15};
+                unet_properties[ATTENTIVE_ERASER_AAS_LAYERS] = aas_layers;
             }
             m_unet = std::make_shared<UNet2DConditionModel>(root_dir / "unet", device, unet_properties);
         } else {
@@ -200,12 +202,14 @@ public:
         OPENVINO_ASSERT(!m_use_attentive_eraser || properties.find(ov::genai::blob_path.name()) == properties.end(),
                         "Attentive Eraser mode does not support compiled model blobs");
         update_adapters_from_properties(properties, m_generation_config.adapters);
-        auto updated_properties = update_adapters_in_properties(properties, &DiffusionPipeline::derived_adapters);
+        auto component_properties = properties;
+        const auto aas_layers = extract_attentive_eraser_aas_layers(component_properties);
+        auto updated_properties = update_adapters_in_properties(component_properties, &DiffusionPipeline::derived_adapters);
 
         m_clip_text_encoder->compile(text_encode_device, *updated_properties);
         auto unet_properties = *updated_properties;
         if (m_use_attentive_eraser) {
-            unet_properties[ATTENTIVE_ERASER_AAS_LAYERS] = std::vector<size_t>{7, 8, 9, 10, 11, 12, 13, 14, 15};
+            unet_properties[ATTENTIVE_ERASER_AAS_LAYERS] = aas_layers;
         }
         m_unet->compile(denoise_device, unet_properties);
         m_vae->compile(vae_device, *updated_properties);
@@ -356,7 +360,7 @@ public:
         const bool is_attentive = m_use_attentive_eraser && m_pipeline_type == PipelineType::INPAINTING;
 
         if (is_attentive) {
-            OPENVINO_ASSERT(positive_prompt.empty(),
+            OPENVINO_ASSERT(attentive_eraser_allows_positive_prompt() || positive_prompt.empty(),
                             "Attentive eraser mode requires an empty positive prompt");
             OPENVINO_ASSERT(generation_config.attentive_eraser.has_value(),
                             "ImageGenerationConfig.attentive_eraser must be set in attentive eraser mode");
@@ -392,8 +396,8 @@ public:
 
         if (is_attentive) {
             const int64_t model_image_size = static_cast<int64_t>(unet_config.sample_size * vae_scale_factor);
-            OPENVINO_ASSERT(model_image_size == 512,
-                            "Attentive eraser mode supports only 512x512 Stable Diffusion 1.5 UNets");
+            OPENVINO_ASSERT(model_image_size == 512 || model_image_size == 1024,
+                            "Attentive eraser mode supports only 512x512 SD1.5 or 1024x1024 SDXL Base UNets");
             OPENVINO_ASSERT(generation_config.height == model_image_size &&
                                 generation_config.width == model_image_size,
                             "Attentive eraser height and width must match the UNet image size of ",
@@ -651,6 +655,27 @@ protected:
 
     virtual size_t attentive_eraser_mask_blur_kernel() const {
         return 7;
+    }
+
+    virtual std::vector<size_t> attentive_eraser_aas_layers() const {
+        return {7, 8, 9, 10, 11, 12, 13, 14, 15};
+    }
+
+    std::vector<size_t> extract_attentive_eraser_aas_layers(ov::AnyMap& properties) const {
+        auto layers = attentive_eraser_aas_layers();
+        const auto iter = properties.find(ATTENTIVE_ERASER_AAS_LAYERS);
+        if (iter != properties.end()) {
+            OPENVINO_ASSERT(m_use_attentive_eraser,
+                            ATTENTIVE_ERASER_AAS_LAYERS,
+                            " is an internal Attentive Eraser property");
+            layers = iter->second.as<std::vector<size_t>>();
+            properties.erase(iter);
+        }
+        return layers;
+    }
+
+    virtual bool attentive_eraser_allows_positive_prompt() const {
+        return false;
     }
 
     size_t get_config_in_channels() const override {

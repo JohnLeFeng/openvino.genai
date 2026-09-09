@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <numeric>
+
 #include "image_generation/stable_diffusion_pipeline.hpp"
 #include "openvino/genai/image_generation/clip_text_model_with_projection.hpp"
 
@@ -23,6 +25,7 @@ public:
 
         nlohmann::json data = nlohmann::json::parse(file);
         using utils::read_json_param;
+        validate_attentive_eraser_model_identity(data);
 
         set_scheduler(Scheduler::from_config(
             root_dir / "scheduler/scheduler_config.json",
@@ -87,12 +90,17 @@ public:
 
         nlohmann::json data = nlohmann::json::parse(file);
         using utils::read_json_param;
+        validate_attentive_eraser_model_identity(data);
+        OPENVINO_ASSERT(!m_use_attentive_eraser || properties.find(ov::genai::blob_path.name()) == properties.end(),
+                        "Attentive Eraser mode does not support compiled model blobs");
 
         set_scheduler(Scheduler::from_config(
             root_dir / "scheduler/scheduler_config.json",
             m_use_attentive_eraser ? Scheduler::Type::DDIM : Scheduler::Type::AUTO));
 
-        const auto [properties_without_blob, blob_path] = utils::extract_export_properties(properties);
+        auto component_properties = properties;
+        const auto aas_layers = extract_attentive_eraser_aas_layers(component_properties);
+        const auto [properties_without_blob, blob_path] = utils::extract_export_properties(component_properties);
 
         auto updated_properties = update_adapters_in_properties(properties_without_blob, &DiffusionPipeline::derived_adapters);
         // updated_properies are for passing to the pipeline subcomponents only, not for the generation config
@@ -132,7 +140,11 @@ public:
             if (blob_path.has_value()) {
                 updated_properties.fork()[ov::genai::blob_path.name()] = blob_path.value() / "unet";
             }
-            m_unet = std::make_shared<UNet2DConditionModel>(root_dir / "unet", device, *updated_properties);
+            auto unet_properties = *updated_properties;
+            if (m_use_attentive_eraser) {
+                unet_properties[ATTENTIVE_ERASER_AAS_LAYERS] = aas_layers;
+            }
+            m_unet = std::make_shared<UNet2DConditionModel>(root_dir / "unet", device, unet_properties);
             updated_properties.fork().erase(ov::genai::blob_path.name());
         } else {
             OPENVINO_THROW("Unsupported '", unet, "' UNet type");
@@ -218,12 +230,20 @@ public:
                  const std::string& denoise_device,
                  const std::string& vae_device,
                  const ov::AnyMap& properties) override {
+        OPENVINO_ASSERT(!m_use_attentive_eraser || properties.find(ov::genai::blob_path.name()) == properties.end(),
+                "Attentive Eraser mode does not support compiled model blobs");
         update_adapters_from_properties(properties, m_generation_config.adapters);
-        auto updated_properties = update_adapters_in_properties(properties, &DiffusionPipeline::derived_adapters);
+        auto component_properties = properties;
+        const auto aas_layers = extract_attentive_eraser_aas_layers(component_properties);
+        auto updated_properties = update_adapters_in_properties(component_properties, &DiffusionPipeline::derived_adapters);
         // updated_properies are for passing to the pipeline subcomponents only, not for the generation config
         m_clip_text_encoder->compile(text_encode_device, *updated_properties);
         m_clip_text_encoder_with_projection->compile(text_encode_device, *updated_properties);
-        m_unet->compile(denoise_device, *updated_properties);
+        auto unet_properties = *updated_properties;
+        if (m_use_attentive_eraser) {
+            unet_properties[ATTENTIVE_ERASER_AAS_LAYERS] = aas_layers;
+        }
+        m_unet->compile(denoise_device, unet_properties);
 
         // EISW-176450
         if (vae_device.find("NPU") != std::string::npos) {
@@ -459,6 +479,16 @@ protected:
         return 77;
     }
 
+    std::vector<size_t> attentive_eraser_aas_layers() const override {
+        std::vector<size_t> layers(36);
+        std::iota(layers.begin(), layers.end(), 34);
+        return layers;
+    }
+
+    bool attentive_eraser_allows_positive_prompt() const override {
+        return true;
+    }
+
     void export_model(const std::filesystem::path& export_path) override {
         m_unet->export_model(export_path / "unet");
         m_clip_text_encoder->export_model(export_path / "text_encoder");
@@ -467,6 +497,16 @@ protected:
     }
 
 private:
+    void validate_attentive_eraser_model_identity(const nlohmann::json& data) const {
+        if (!m_use_attentive_eraser) {
+            return;
+        }
+        OPENVINO_ASSERT(data.value("_class_name", std::string{}) == "StableDiffusionXLPipeline" &&
+                            data.value("_name_or_path", std::string{}) ==
+                                "stabilityai/stable-diffusion-xl-base-1.0",
+                        "Attentive Eraser mode supports only SDXL Base 1.0");
+    }
+
     void initialize_generation_config(const std::string& class_name) override {
         OPENVINO_ASSERT(m_unet != nullptr);
         OPENVINO_ASSERT(m_vae != nullptr);
@@ -503,6 +543,7 @@ private:
             OPENVINO_ASSERT(m_pipeline_type == PipelineType::INPAINTING,
                             "Attentive Eraser mode is available for inpainting pipelines only");
             apply_attentive_eraser_defaults(m_generation_config);
+            m_generation_config.strength = 0.8f;
         }
     }
 
