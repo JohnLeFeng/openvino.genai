@@ -251,25 +251,27 @@ Note, that LoRA, heterogeneous execution and other features of `Text2ImagePipeli
 
 ## Run Attentive Eraser through the inpainting pipeline
 
-The `attentive_eraser_pipeline.cpp` sample uses the same `InpaintingPipeline` interface with `InpaintingMode::ATTENTIVE_ERASER`. The model family is detected from the exported model, so the same executable supports SD1.5, SD2, and SDXL attentive models.
+The `attentive_eraser_pipeline.cpp` sample uses the same `InpaintingPipeline` interface with `InpaintingMode::ATTENTIVE_ERASER`. It accepts ordinary 512x512 SD1.5 and SD2 models or an ordinary 1024x1024 SDXL Base model; the pipeline injects the AAS graph transformation before compiling the UNet. Pre-converting the UNet with Python or Torch is not required.
+
+The UNet graph contract distinguishes SD1.5 (cross-attention width 768), SD2 (width 1024), and SDXL Base (width 2048 with `text_embeds` and `time_ids`). SD1.5 and SD2 both use 16 self-attention layers, the default AAS range `[7,16)`, and a 7-pixel mask blur kernel.
 
 The matching Python sample is [`attentive_eraser_pipeline.py`](../../python/image_generation/attentive_eraser_pipeline.py) and uses the same arguments and defaults.
 
-Run it with an attentive model, source image, and mask:
+Run it with a supported model, source image, and mask:
 
 ```sh
-./attentive_eraser_pipeline <MODEL_DIR> <IMAGE> <MASK_IMAGE> [DEVICE] [SEED]
+./attentive_eraser_pipeline <MODEL_DIR> <IMAGE> <MASK_IMAGE> [DEVICE] [SEED] [STEPS]
 ```
 
 For example:
 
 ```sh
-./attentive_eraser_pipeline ./sd15_atten_eraser_ov source_image.png mask.png GPU 123
+./attentive_eraser_pipeline ./stable-diffusion-v1-5-ov source_image.png mask.png GPU 123
 ```
 
 The positive prompt is intentionally empty for object removal. The sample keeps `strength`, removal guidance scale, self-attention suppression steps, and inference steps visible in the generation config so they can be edited without expanding the CLI. It uses `strength = 0.8`, which executes 40 of the configured 50 denoising steps.
 
-The pipeline resizes mismatched image or mask inputs to the model's fixed dimensions: 512x512 for SD1.5/SD2 and 1024x1024 for SDXL. Gaussian blur, mask binarization, and latent-mask max pooling remain internal pipeline operations. The generated image is saved as `object_removed_image.bmp`.
+The pipeline resizes mismatched image or mask inputs to the model size. Gaussian blur, mask binarization, latent-mask max pooling, and AAS runtime input updates remain internal pipeline operations. The generated image is saved as `object_removed_image.bmp`.
 
 ## Benchmarking sample for image generation pipelines
 

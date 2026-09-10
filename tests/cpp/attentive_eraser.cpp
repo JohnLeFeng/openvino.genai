@@ -1,7 +1,7 @@
 // Copyright (C) 2023-2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-#include "image_generation/attentive_eraser_utils.hpp"
+#include "openvino/genai/image_generation/attentive_eraser_utils.hpp"
 #include "openvino/genai/image_generation/inpainting_pipeline.hpp"
 #include "image_generation/stable_diffusion_pipeline.hpp"
 
@@ -27,6 +27,7 @@ public:
 
     using StableDiffusionPipeline::apply_attentive_removal_guidance;
     using StableDiffusionPipeline::blend_attentive_latents;
+    using StableDiffusionPipeline::extract_attentive_eraser_aas_layers;
 
     bool uses_ddim_scheduler() const {
         return std::dynamic_pointer_cast<ov::genai::DDIMScheduler>(m_scheduler) != nullptr;
@@ -80,6 +81,16 @@ TEST(AttentiveEraserTensorTest, BlendsLatentsUsingMask) {
     EXPECT_FLOAT_EQ(latents.data<const float>()[1], 20.0f);
 }
 
+TEST(AttentiveEraserPipelineTest, ConsumesInternalLayerOverrideBeforeComponentCompilation) {
+    AttentiveEraserPipelineTestAccessor pipeline(true);
+    ov::AnyMap properties{{"ATTENTIVE_ERASER_AAS_LAYERS", std::vector<size_t>{40, 41, 42}}};
+
+    const auto layers = pipeline.extract_attentive_eraser_aas_layers(properties);
+
+    EXPECT_EQ(layers, (std::vector<size_t>{40, 41, 42}));
+    EXPECT_TRUE(properties.empty());
+}
+
 TEST(AttentiveEraserSchedulerTest, RejectsNonDdimOverrideAndKeepsCurrentScheduler) {
     const auto config_path = std::filesystem::temp_directory_path() / "attentive_eraser_scheduler_config.json";
     {
@@ -126,7 +137,7 @@ TEST_P(UnsupportedAttentiveEraserPipelineTest, RejectsUnsupportedModelFamily) {
         FAIL() << "Expected Attentive Eraser to reject " << class_name;
     } catch (const ov::Exception& error) {
         EXPECT_NE(std::string(error.what()).find(
-                      "Attentive Eraser mode requires a 4-channel SD1.5, SD2, or SDXL pipeline"),
+                      "Attentive Eraser mode supports only Stable Diffusion 1.5, 2, and SDXL Base pipelines"),
                   std::string::npos);
     }
 
@@ -139,9 +150,54 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Values("LatentConsistencyModelPipeline",
                     "StableDiffusionInpaintPipeline",
                     "StableDiffusionXLInpaintPipeline",
+                    "StableDiffusionXLImg2ImgPipeline",
+                    "StableDiffusionXLRefinerPipeline",
+                    "StableDiffusionXLTurboPipeline",
                     "StableDiffusion3Pipeline",
                     "FluxPipeline",
                     "FluxFillPipeline"));
+
+TEST(AttentiveEraserPipelineTest, AcceptsSdxlBaseAtPublicDispatchGate) {
+    const auto root_dir = std::filesystem::temp_directory_path() / "attentive_eraser_sdxl_base";
+    std::filesystem::create_directories(root_dir);
+    {
+        std::ofstream model_index(root_dir / "model_index.json");
+        model_index << R"({"_class_name": "StableDiffusionXLPipeline", "_name_or_path": "stabilityai/stable-diffusion-xl-base-1.0"})";
+    }
+
+    try {
+        ov::genai::InpaintingPipeline pipeline(
+            root_dir,
+            "CPU",
+            ov::genai::inpainting_mode(ov::genai::InpaintingMode::ATTENTIVE_ERASER));
+        FAIL() << "Expected incomplete synthetic SDXL directory to fail after dispatch";
+    } catch (const ov::Exception& error) {
+        EXPECT_EQ(std::string(error.what()).find("Attentive Eraser mode supports only"), std::string::npos);
+    }
+
+    std::filesystem::remove_all(root_dir);
+}
+
+TEST(AttentiveEraserPipelineTest, RejectsCustomSdxlModelIdentity) {
+    const auto root_dir = std::filesystem::temp_directory_path() / "attentive_eraser_custom_sdxl";
+    std::filesystem::create_directories(root_dir);
+    {
+        std::ofstream model_index(root_dir / "model_index.json");
+        model_index << R"({"_class_name": "StableDiffusionXLPipeline", "_name_or_path": "example/custom-sdxl"})";
+    }
+
+    try {
+        ov::genai::InpaintingPipeline pipeline(
+            root_dir,
+            "CPU",
+            ov::genai::inpainting_mode(ov::genai::InpaintingMode::ATTENTIVE_ERASER));
+        FAIL() << "Expected Attentive Eraser to reject a custom SDXL model";
+    } catch (const ov::Exception& error) {
+        EXPECT_NE(std::string(error.what()).find("supports only SDXL Base 1.0"), std::string::npos);
+    }
+
+    std::filesystem::remove_all(root_dir);
+}
 
 TEST(AttentiveEraserConfigTest, UsesFullDenoisingStrengthForEveryModelFamily) {
     ov::genai::ImageGenerationConfig config;
@@ -165,6 +221,33 @@ TEST(AttentiveEraserConfigTest, ValidatesMaskBlurKernelOverride) {
 
     config.mask_blur_kernel = 8;
     EXPECT_THROW(config.validate(), ov::Exception);
+}
+
+TEST(AttentiveEraserConfigTest, ProvidesRuntimeAasDefaults) {
+    ov::genai::AttentiveEraserConfig config;
+
+    EXPECT_EQ(config.start_step, 0);
+    EXPECT_FLOAT_EQ(config.ss_scale, 0.3f);
+}
+
+TEST(AttentiveEraserConfigTest, ValidatesRuntimeAasControls) {
+    ov::genai::AttentiveEraserConfig config;
+    EXPECT_NO_THROW(config.validate());
+
+    config.ss_scale = 0.0f;
+    EXPECT_THROW(config.validate(), ov::Exception);
+
+    config.ss_scale = 1.01f;
+    EXPECT_THROW(config.validate(), ov::Exception);
+}
+
+TEST(AttentiveEraserConfigTest, UsesConfiguredAasStepBoundaries) {
+    EXPECT_FALSE(ov::genai::is_attentive_eraser_aas_active(3, 4, 0.8f, 50));
+    EXPECT_TRUE(ov::genai::is_attentive_eraser_aas_active(4, 4, 0.8f, 50));
+    EXPECT_TRUE(ov::genai::is_attentive_eraser_aas_active(39, 4, 0.8f, 50));
+    EXPECT_FALSE(ov::genai::is_attentive_eraser_aas_active(40, 4, 0.8f, 50));
+    EXPECT_TRUE(ov::genai::is_attentive_eraser_ss_active(9, 9));
+    EXPECT_FALSE(ov::genai::is_attentive_eraser_ss_active(10, 9));
 }
 
 }  // namespace

@@ -40,6 +40,7 @@ void CppStdGenerator::seed(size_t new_seed) {
 
 void AttentiveEraserConfig::validate() const {
     OPENVINO_ASSERT(rm_guidance_scale > 0.0f, "rm_guidance_scale must be positive");
+    OPENVINO_ASSERT(ss_scale > 0.0f && ss_scale <= 1.0f, "ss_scale must be in (0, 1]");
     OPENVINO_ASSERT(mask_blur_kernel == 0 || mask_blur_kernel % 2 == 1,
                     "mask_blur_kernel must be zero or a positive odd number");
 }
