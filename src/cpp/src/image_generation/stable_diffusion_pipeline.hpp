@@ -360,7 +360,7 @@ public:
         const bool is_attentive = m_use_attentive_eraser && m_pipeline_type == PipelineType::INPAINTING;
 
         if (is_attentive) {
-            OPENVINO_ASSERT(attentive_eraser_allows_positive_prompt() || positive_prompt.empty(),
+            OPENVINO_ASSERT(positive_prompt.empty(),
                             "Attentive eraser mode requires an empty positive prompt");
             OPENVINO_ASSERT(generation_config.attentive_eraser.has_value(),
                             "ImageGenerationConfig.attentive_eraser must be set in attentive eraser mode");
@@ -672,10 +672,6 @@ protected:
             properties.erase(iter);
         }
         return layers;
-    }
-
-    virtual bool attentive_eraser_allows_positive_prompt() const {
-        return false;
     }
 
     size_t get_config_in_channels() const override {

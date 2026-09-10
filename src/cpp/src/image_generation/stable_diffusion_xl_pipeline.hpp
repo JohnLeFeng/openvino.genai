@@ -485,10 +485,6 @@ protected:
         return layers;
     }
 
-    bool attentive_eraser_allows_positive_prompt() const override {
-        return true;
-    }
-
     void export_model(const std::filesystem::path& export_path) override {
         m_unet->export_model(export_path / "unet");
         m_clip_text_encoder->export_model(export_path / "text_encoder");
