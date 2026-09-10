@@ -13,6 +13,7 @@ There are several sample files:
  - [`image2image.cpp`](./image2image.cpp) demonstrates basic usage of the image to image pipeline
  - [`image2image_concurrency.cpp`](./image2image_concurrency.cpp) demonstrates concurrent usage of the image to image pipeline to create multiple images with different prompts
  - [`inpainting.cpp`](./inpainting.cpp) demonstrates basic usage of the inpainting pipeline
+ - [`attentive_eraser_pipeline.cpp`](./attentive_eraser_pipeline.cpp) demonstrates object removal with Attentive Eraser mode through the inpainting pipeline
  - [`benchmark_image_gen.cpp`](./benchmark_image_gen.cpp) demonstrates how to benchmark the text to image / image to image / inpainting pipeline
  - [`stable_diffusion_export_import.cpp`](./stable_diffusion_export_import.cpp) demonstrates how to export and import compiled models from/to the text to image pipeline. Only the Stable Diffusion XL model is supported.
 
@@ -247,6 +248,30 @@ The resulting image is:
    ![](./inpainting.bmp)
 
 Note, that LoRA, heterogeneous execution and other features of `Text2ImagePipeline` are applicable for `InpaintingPipeline`.
+
+## Run Attentive Eraser through the inpainting pipeline
+
+The `attentive_eraser_pipeline.cpp` sample uses the same `InpaintingPipeline` interface with `InpaintingMode::ATTENTIVE_ERASER`. It accepts ordinary 512x512 SD1.5 and SD2 models or an ordinary 1024x1024 SDXL Base model; the pipeline injects the AAS graph transformation before compiling the UNet. Pre-converting the UNet with Python or Torch is not required.
+
+The UNet graph contract distinguishes SD1.5 (cross-attention width 768), SD2 (width 1024), and SDXL Base (width 2048 with `text_embeds` and `time_ids`). SD1.5 and SD2 both use 16 self-attention layers, the default AAS range `[7,16)`, and a 7-pixel mask blur kernel.
+
+The matching Python sample is [`attentive_eraser_pipeline.py`](../../python/image_generation/attentive_eraser_pipeline.py) and uses the same arguments and defaults.
+
+Run it with a supported model, source image, and mask:
+
+```sh
+./attentive_eraser_pipeline <MODEL_DIR> <IMAGE> <MASK_IMAGE> [DEVICE] [SEED] [STEPS]
+```
+
+For example:
+
+```sh
+./attentive_eraser_pipeline ./stable-diffusion-v1-5-ov source_image.png mask.png GPU 123
+```
+
+The positive prompt is intentionally empty for object removal. The sample keeps `strength`, removal guidance scale, self-attention suppression steps, and inference steps visible in the generation config so they can be edited without expanding the CLI. It uses `strength = 0.8`, which executes 40 of the configured 50 denoising steps.
+
+The pipeline resizes mismatched image or mask inputs to the model size. Gaussian blur, mask binarization, latent-mask max pooling, and AAS runtime input updates remain internal pipeline operations. The generated image is saved as `object_removed_image.bmp`.
 
 ## Benchmarking sample for image generation pipelines
 

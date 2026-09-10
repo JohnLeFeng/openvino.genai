@@ -16,6 +16,7 @@
 #include "openvino/core/extension.hpp"
 #include "openvino/genai/extensions.hpp"
 #include "openvino/genai/image_generation/generation_config.hpp"
+#include "openvino/genai/image_generation/inpainting_pipeline.hpp"
 #include "openvino/genai/llm_pipeline.hpp"
 #include "openvino/genai/rag/text_embedding_pipeline.hpp"
 #include "openvino/genai/taylorseer_config.hpp"
@@ -161,6 +162,10 @@ ov::Any py_object_to_any(const py::object& py_obj, std::string property_name) {
         return py_obj.cast<float>();
     } else if (py::isinstance(py_obj, float_32_type)) {
         return py_obj.cast<float>();
+    } else if (py::isinstance<ov::genai::AttentiveEraserConfig>(py_obj)) {
+        return py_obj.cast<ov::genai::AttentiveEraserConfig>();
+    } else if (py::isinstance<ov::genai::InpaintingMode>(py_obj)) {
+        return py_obj.cast<ov::genai::InpaintingMode>();
     } else if (py::isinstance<py::int_>(py_obj)) {
         return py_obj.cast<int64_t>();
     } else if (py::isinstance<py::none>(py_obj)) {

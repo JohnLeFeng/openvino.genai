@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "openvino/genai/image_generation/unet2d_condition_model.hpp"
+#include "openvino/genai/image_generation/attentive_eraser_aas.hpp"
 #include "image_generation/models/unet_inference_dynamic.hpp"
 #include "image_generation/models/unet_inference_static_bs1.hpp"
 
+#include <algorithm>
 #include <fstream>
 
 #include "json_utils.hpp"
@@ -120,11 +122,29 @@ UNet2DConditionModel& UNet2DConditionModel::compile(const std::string& device, c
 
     std::optional<AdapterConfig> adapters;
     auto filtered_properties = extract_adapters_from_properties(properties, &adapters);
+    auto plugin_properties = *filtered_properties;
+    auto aas_iter = plugin_properties.find(ATTENTIVE_ERASER_AAS_LAYERS);
+    if (aas_iter != plugin_properties.end()) {
+        OPENVINO_ASSERT(!adapters, "Attentive Eraser AAS cannot be combined with LoRA adapters");
+        OPENVINO_ASSERT(device == "CPU" || device == "GPU",
+                        "Attentive Eraser AAS supports only CPU and GPU devices");
+        const auto unet_type = identify_attentive_eraser_unet(m_model);
+        const bool has_supported_config = m_config.in_channels == 4 && m_vae_scale_factor == 8 &&
+                        (((unet_type == AttentiveEraserUNetType::SD15 || unet_type == AttentiveEraserUNetType::SD2) &&
+                            m_config.sample_size == 64) ||
+             (unet_type == AttentiveEraserUNetType::SDXL_BASE && m_config.sample_size == 128));
+        OPENVINO_ASSERT(has_supported_config,
+                                                "Attentive Eraser AAS supports only 512x512 Stable Diffusion 1.5/2 or "
+                        "1024x1024 SDXL Base UNets");
+        const auto layer_indices = aas_iter->second.as<std::vector<size_t>>();
+        plugin_properties.erase(aas_iter);
+        apply_attentive_eraser_aas(m_model, layer_indices);
+    }
     if (adapters) {
         adapters->set_tensor_name_prefix(adapters->get_tensor_name_prefix().value_or("lora_unet"));
         m_adapter_controller = AdapterController(m_model, *adapters, device);
     }
-    m_impl->compile(m_model, device, *filtered_properties);
+    m_impl->compile(m_model, device, plugin_properties);
 
     // release the original model
     m_model.reset();
@@ -171,6 +191,16 @@ void UNet2DConditionModel::set_adapters(const std::optional<AdapterConfig>& adap
 ov::Tensor UNet2DConditionModel::infer(ov::Tensor sample, ov::Tensor timestep) {
     OPENVINO_ASSERT(m_impl, "UNet model must be compiled first. Cannot infer non-compiled model");
     return m_impl->infer(sample, timestep);
+}
+
+ov::Tensor UNet2DConditionModel::infer(
+    ov::Tensor sample,
+    ov::Tensor timestep,
+    const std::unordered_map<std::string, ov::Tensor>& additional_inputs) {
+    for (const auto& [name, tensor] : additional_inputs) {
+        set_hidden_states(name, tensor);
+    }
+    return infer(sample, timestep);
 }
 
 void UNet2DConditionModel::export_model(const std::filesystem::path& blob_path) {

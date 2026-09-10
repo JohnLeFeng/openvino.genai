@@ -361,6 +361,19 @@ void init_image_generation_pipelines(py::module_& m) {
         .def("to_string", &ov::genai::TaylorSeerCacheConfig::to_string)
         .def("__repr__", &ov::genai::TaylorSeerCacheConfig::to_string);
 
+    py::enum_<ov::genai::InpaintingMode>(m, "InpaintingMode")
+        .value("STANDARD", ov::genai::InpaintingMode::STANDARD)
+        .value("ATTENTIVE_ERASER", ov::genai::InpaintingMode::ATTENTIVE_ERASER);
+
+    py::class_<ov::genai::AttentiveEraserConfig>(m, "AttentiveEraserConfig", "Runtime controls for SD1.5 Attentive Eraser generation.")
+        .def(py::init<>())
+        .def_readwrite("rm_guidance_scale", &ov::genai::AttentiveEraserConfig::rm_guidance_scale, "Removal guidance scale; must be positive.")
+        .def_readwrite("ss_steps", &ov::genai::AttentiveEraserConfig::ss_steps, "Last denoising step that applies softmax scaling, inclusive.")
+        .def_readwrite("start_step", &ov::genai::AttentiveEraserConfig::start_step, "First denoising step that applies AAS, inclusive.")
+        .def_readwrite("ss_scale", &ov::genai::AttentiveEraserConfig::ss_scale, "Foreground softmax-logit scale in (0, 1].")
+        .def_readwrite("mask_blur_kernel", &ov::genai::AttentiveEraserConfig::mask_blur_kernel, "Odd Gaussian mask-blur kernel size; zero selects the pipeline default.")
+        .def("validate", &ov::genai::AttentiveEraserConfig::validate);
+
     py::class_<ov::genai::ImageGenerationConfig>(m, "ImageGenerationConfig", "This class is used for storing generation config for image generation pipeline.")
         .def(py::init<>())
         .def_readwrite("prompt_2", &ov::genai::ImageGenerationConfig::prompt_2)
@@ -379,6 +392,7 @@ void init_image_generation_pipelines(py::module_& m) {
         .def_readwrite("strength", &ov::genai::ImageGenerationConfig::strength)
         .def_readwrite("max_sequence_length", &ov::genai::ImageGenerationConfig::max_sequence_length)
         .def_readwrite("taylorseer_config", &ov::genai::ImageGenerationConfig::taylorseer_config)
+        .def_readwrite("attentive_eraser", &ov::genai::ImageGenerationConfig::attentive_eraser)
         .def("validate", &ov::genai::ImageGenerationConfig::validate)
         .def("update_generation_config", [](
             ov::genai::ImageGenerationConfig& config,
@@ -660,7 +674,9 @@ void init_image_generation_pipelines(py::module_& m) {
             const py::kwargs& kwargs
         ) {
             ScopedVar env_manager(pyutils::ov_tokenizers_module_path());
-            return std::make_unique<ov::genai::InpaintingPipeline>(models_path, device, pyutils::kwargs_to_any_map(kwargs));
+            return std::make_unique<ov::genai::InpaintingPipeline>(models_path,
+                                                                   device,
+                                                                   pyutils::kwargs_to_any_map(kwargs));
         }),
         py::arg("models_path"), "folder with exported model files.",
         py::arg("device"), "device on which inference will be done",

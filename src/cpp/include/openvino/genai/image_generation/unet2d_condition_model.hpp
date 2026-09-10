@@ -4,6 +4,7 @@
 #pragma once
 
 #include <filesystem>
+#include <unordered_map>
 #include <vector>
 #include <string>
 #include <memory>
@@ -111,6 +112,9 @@ public:
     void set_adapters(const std::optional<AdapterConfig>& adapters);
 
     ov::Tensor infer(ov::Tensor sample, ov::Tensor timestep);
+    ov::Tensor infer(ov::Tensor sample,
+                     ov::Tensor timestep,
+                     const std::unordered_map<std::string, ov::Tensor>& additional_inputs);
 
     bool do_classifier_free_guidance(float guidance_scale) const {
         return guidance_scale > 1.0f && m_config.time_cond_proj_dim < 0;

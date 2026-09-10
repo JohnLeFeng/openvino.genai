@@ -2178,6 +2178,46 @@ class Image2ImagePipeline:
         ...
     def set_scheduler(self, scheduler: Scheduler) -> None:
         ...
+class AttentiveEraserConfig:
+    """Runtime controls for SD1.5 Attentive Eraser generation."""
+    def __init__(self) -> None:
+        ...
+    def validate(self) -> None:
+        ...
+    @property
+    def mask_blur_kernel(self) -> int:
+        """Odd Gaussian mask-blur kernel size; zero selects the pipeline default."""
+        ...
+    @mask_blur_kernel.setter
+    def mask_blur_kernel(self, arg0: typing.SupportsInt) -> None:
+        ...
+    @property
+    def rm_guidance_scale(self) -> float:
+        """Removal guidance scale; must be positive."""
+        ...
+    @rm_guidance_scale.setter
+    def rm_guidance_scale(self, arg0: typing.SupportsFloat) -> None:
+        ...
+    @property
+    def ss_scale(self) -> float:
+        """Foreground softmax-logit scale in (0, 1]."""
+        ...
+    @ss_scale.setter
+    def ss_scale(self, arg0: typing.SupportsFloat) -> None:
+        ...
+    @property
+    def start_step(self) -> int:
+        """First denoising step that applies AAS, inclusive."""
+        ...
+    @start_step.setter
+    def start_step(self, arg0: typing.SupportsInt) -> None:
+        ...
+    @property
+    def ss_steps(self) -> int:
+        """Last denoising step that applies softmax scaling, inclusive."""
+        ...
+    @ss_steps.setter
+    def ss_steps(self, arg0: typing.SupportsInt) -> None:
 class Image2VideoPipeline:
     @typing.overload
     def __init__(self, models_path: os.PathLike | str | bytes) -> None:
@@ -2208,6 +2248,7 @@ class ImageGenerationConfig:
     This class is used for storing generation config for image generation pipeline.
     """
     adapters: openvino_genai.py_openvino_genai.AdapterConfig | None
+    attentive_eraser: openvino_genai.py_openvino_genai.AttentiveEraserConfig | None
     generator: Generator
     negative_prompt: str | None
     negative_prompt_2: str | None
@@ -2376,6 +2417,20 @@ class IncrementalParser:
         """
         Set the current streaming status of the parser.
         """
+class InpaintingMode:
+    STANDARD: typing.ClassVar[InpaintingMode]
+    ATTENTIVE_ERASER: typing.ClassVar[InpaintingMode]
+    __members__: typing.ClassVar[dict[str, InpaintingMode]]
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __str__(self) -> str:
+        ...
 class InpaintingPipeline:
     """
     This class is used for generation with inpainting models.
