@@ -3,7 +3,7 @@
 
 #include <gtest/gtest.h>
 
-#include "image_generation/models/attentive_eraser_aas.hpp"
+#include "openvino/genai/image_generation/attentive_eraser_aas.hpp"
 #include "openvino/opsets/opset13.hpp"
 #include "utils.hpp"
 

@@ -1,7 +1,7 @@
 // Copyright (C) 2023-2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-#include "image_generation/models/attentive_eraser_aas.hpp"
+#include "openvino/genai/image_generation/attentive_eraser_aas.hpp"
 
 #include <algorithm>
 #include <cmath>

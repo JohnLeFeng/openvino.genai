@@ -10,9 +10,9 @@
 #include <filesystem>
 
 #include "image_generation/diffusion_pipeline.hpp"
-#include "image_generation/models/attentive_eraser_aas.hpp"
 #include "image_generation/threaded_callback.hpp"
 
+#include "openvino/genai/image_generation/attentive_eraser_aas.hpp"
 #include "openvino/genai/image_generation/attentive_eraser_utils.hpp"
 #include "openvino/genai/image_generation/clip_text_model.hpp"
 #include "openvino/genai/image_generation/clip_text_model_with_projection.hpp"

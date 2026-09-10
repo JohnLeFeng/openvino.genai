@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "openvino/genai/image_generation/unet2d_condition_model.hpp"
-#include "image_generation/models/attentive_eraser_aas.hpp"
+#include "openvino/genai/image_generation/attentive_eraser_aas.hpp"
 #include "image_generation/models/unet_inference_dynamic.hpp"
 #include "image_generation/models/unet_inference_static_bs1.hpp"
 
