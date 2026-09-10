@@ -77,10 +77,12 @@ size_t count_named_self_attention_nodes(const std::shared_ptr<ov::Model>& model)
 TEST(AttentiveEraserGraphTransform, IdentifiesUnetFromGraphInputContract) {
     EXPECT_EQ(ov::genai::identify_attentive_eraser_unet(make_unet_contract_model(768, false)),
               ov::genai::AttentiveEraserUNetType::SD15);
+    EXPECT_EQ(ov::genai::identify_attentive_eraser_unet(make_unet_contract_model(1024, false)),
+              ov::genai::AttentiveEraserUNetType::SD2);
     EXPECT_EQ(ov::genai::identify_attentive_eraser_unet(make_unet_contract_model(2048, true)),
               ov::genai::AttentiveEraserUNetType::SDXL_BASE);
 
-    EXPECT_THROW(ov::genai::identify_attentive_eraser_unet(make_unet_contract_model(1024, false)), ov::Exception);
+    EXPECT_THROW(ov::genai::identify_attentive_eraser_unet(make_unet_contract_model(1280, false)), ov::Exception);
     EXPECT_THROW(ov::genai::identify_attentive_eraser_unet(make_unet_contract_model(2048, false)), ov::Exception);
 }
 

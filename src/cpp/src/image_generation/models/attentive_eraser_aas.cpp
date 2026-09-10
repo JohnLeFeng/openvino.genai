@@ -93,10 +93,14 @@ AttentiveEraserUNetType identify_attentive_eraser_unet(const std::shared_ptr<ov:
     if (cross_attention_dim == 768) {
         return AttentiveEraserUNetType::SD15;
     }
+    if (cross_attention_dim == 1024) {
+        return AttentiveEraserUNetType::SD2;
+    }
     if (cross_attention_dim == 2048 && find_input("text_embeds") && find_input("time_ids")) {
         return AttentiveEraserUNetType::SDXL_BASE;
     }
-    OPENVINO_THROW("Attentive Eraser AAS supports only SD1.5 UNets with encoder width 768 or "
+    OPENVINO_THROW("Attentive Eraser AAS supports only SD1.5 UNets with encoder width 768, "
+                   "SD2 UNets with encoder width 1024, or "
                    "SDXL Base UNets with encoder width 2048, text_embeds, and time_ids inputs");
 }
 
@@ -111,7 +115,7 @@ void apply_attentive_eraser_aas(const std::shared_ptr<ov::Model>& model,
         });
     };
     OPENVINO_ASSERT(!has_input("mask") && !has_input("cur_step") && !has_input("ss_steps"),
-                    "Legacy pre-converted Attentive Eraser UNet IR is not supported; use an ordinary SD1.5 UNet");
+                    "Legacy pre-converted Attentive Eraser UNet IR is not supported; use an ordinary UNet");
 
     std::vector<std::shared_ptr<ov::op::v13::ScaledDotProductAttention>> self_attention_layers;
     for (const auto& node : model->get_ordered_ops()) {
@@ -123,7 +127,7 @@ void apply_attentive_eraser_aas(const std::shared_ptr<ov::Model>& model,
     const size_t self_attention_count = self_attention_layers.size();
     OPENVINO_ASSERT(self_attention_count == SD15_SELF_ATTENTION_COUNT ||
                         self_attention_count == SDXL_SELF_ATTENTION_COUNT,
-                    "Attentive Eraser AAS requires exactly 16 SD1.5 or 70 SDXL self-attention layers, but found ",
+                    "Attentive Eraser AAS requires exactly 16 SD1.5/SD2 or 70 SDXL self-attention layers, but found ",
                     self_attention_layers.size());
     OPENVINO_ASSERT(!layer_indices.empty(), "Attentive Eraser AAS requires at least one selected layer");
     OPENVINO_ASSERT(std::all_of(layer_indices.begin(), layer_indices.end(), [self_attention_count](size_t index) {

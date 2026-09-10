@@ -137,7 +137,7 @@ TEST_P(UnsupportedAttentiveEraserPipelineTest, RejectsUnsupportedModelFamily) {
         FAIL() << "Expected Attentive Eraser to reject " << class_name;
     } catch (const ov::Exception& error) {
         EXPECT_NE(std::string(error.what()).find(
-                      "Attentive Eraser mode supports only Stable Diffusion 1.5 and SDXL Base pipelines"),
+                      "Attentive Eraser mode supports only Stable Diffusion 1.5, 2, and SDXL Base pipelines"),
                   std::string::npos);
     }
 

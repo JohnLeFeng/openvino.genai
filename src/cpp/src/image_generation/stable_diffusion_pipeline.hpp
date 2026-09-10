@@ -397,7 +397,7 @@ public:
         if (is_attentive) {
             const int64_t model_image_size = static_cast<int64_t>(unet_config.sample_size * vae_scale_factor);
             OPENVINO_ASSERT(model_image_size == 512 || model_image_size == 1024,
-                            "Attentive eraser mode supports only 512x512 SD1.5 or 1024x1024 SDXL Base UNets");
+                            "Attentive eraser mode supports only 512x512 SD1.5/SD2 or 1024x1024 SDXL Base UNets");
             OPENVINO_ASSERT(generation_config.height == model_image_size &&
                                 generation_config.width == model_image_size,
                             "Attentive eraser height and width must match the UNet image size of ",

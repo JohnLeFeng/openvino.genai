@@ -130,10 +130,11 @@ UNet2DConditionModel& UNet2DConditionModel::compile(const std::string& device, c
                         "Attentive Eraser AAS supports only CPU and GPU devices");
         const auto unet_type = identify_attentive_eraser_unet(m_model);
         const bool has_supported_config = m_config.in_channels == 4 && m_vae_scale_factor == 8 &&
-            ((unet_type == AttentiveEraserUNetType::SD15 && m_config.sample_size == 64) ||
+                        (((unet_type == AttentiveEraserUNetType::SD15 || unet_type == AttentiveEraserUNetType::SD2) &&
+                            m_config.sample_size == 64) ||
              (unet_type == AttentiveEraserUNetType::SDXL_BASE && m_config.sample_size == 128));
         OPENVINO_ASSERT(has_supported_config,
-                        "Attentive Eraser AAS supports only 512x512 Stable Diffusion 1.5 or "
+                                                "Attentive Eraser AAS supports only 512x512 Stable Diffusion 1.5/2 or "
                         "1024x1024 SDXL Base UNets");
         const auto layer_indices = aas_iter->second.as<std::vector<size_t>>();
         plugin_properties.erase(aas_iter);
