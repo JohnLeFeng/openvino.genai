@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <set>
 #include <string>
 
@@ -68,6 +69,36 @@ ov::Output<ov::Node> attention(const ov::Output<ov::Node>& query,
 }
 
 }  // namespace
+
+AttentiveEraserUNetType identify_attentive_eraser_unet(const std::shared_ptr<ov::Model>& model) {
+    OPENVINO_ASSERT(model, "Attentive Eraser AAS requires a UNet model");
+
+    const auto find_input = [&model](const std::string& name) -> std::optional<ov::Output<const ov::Node>> {
+        const auto inputs = model->inputs();
+        const auto input = std::find_if(inputs.begin(), inputs.end(), [&name](const ov::Output<const ov::Node>& value) {
+            return value.get_names().count(name) > 0;
+        });
+        return input == inputs.end() ? std::nullopt : std::optional<ov::Output<const ov::Node>>{*input};
+    };
+
+    const auto encoder_hidden_states = find_input("encoder_hidden_states");
+    OPENVINO_ASSERT(encoder_hidden_states,
+                    "Attentive Eraser AAS requires an encoder_hidden_states UNet input");
+    const auto encoder_shape = encoder_hidden_states->get_partial_shape();
+    OPENVINO_ASSERT(encoder_shape.rank().is_static() && encoder_shape.rank().get_length() == 3 &&
+                        encoder_shape[2].is_static(),
+                    "Attentive Eraser AAS requires a static encoder_hidden_states width");
+
+    const auto cross_attention_dim = encoder_shape[2].get_length();
+    if (cross_attention_dim == 768) {
+        return AttentiveEraserUNetType::SD15;
+    }
+    if (cross_attention_dim == 2048 && find_input("text_embeds") && find_input("time_ids")) {
+        return AttentiveEraserUNetType::SDXL_BASE;
+    }
+    OPENVINO_THROW("Attentive Eraser AAS supports only SD1.5 UNets with encoder width 768 or "
+                   "SDXL Base UNets with encoder width 2048, text_embeds, and time_ids inputs");
+}
 
 void apply_attentive_eraser_aas(const std::shared_ptr<ov::Model>& model,
                                 const std::vector<size_t>& layer_indices) {
