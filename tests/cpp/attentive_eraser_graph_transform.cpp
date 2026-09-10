@@ -9,6 +9,26 @@
 
 namespace {
 
+std::shared_ptr<ov::Model> make_unet_contract_model(size_t cross_attention_dim, bool has_sdxl_inputs) {
+    using namespace ov::opset13;
+
+    ov::ParameterVector parameters;
+    ov::ResultVector results;
+    const auto add_parameter = [&parameters, &results](const std::string& name, const ov::Shape& shape) {
+        auto parameter = std::make_shared<Parameter>(ov::element::f32, shape);
+        parameter->output(0).get_tensor().set_names({name});
+        parameters.push_back(parameter);
+        results.push_back(std::make_shared<Result>(parameter));
+    };
+
+    add_parameter("encoder_hidden_states", {2, 77, cross_attention_dim});
+    if (has_sdxl_inputs) {
+        add_parameter("text_embeds", {2, 1280});
+        add_parameter("time_ids", {2, 6});
+    }
+    return std::make_shared<ov::Model>(results, parameters);
+}
+
 std::shared_ptr<ov::Model> make_attention_model(size_t self_attention_count) {
     using namespace ov::opset13;
 
@@ -52,6 +72,16 @@ size_t count_named_self_attention_nodes(const std::shared_ptr<ov::Model>& model)
         return ov::is_type<ov::opset13::ScaledDotProductAttention>(node) &&
                node->get_friendly_name().find(".attn1/") != std::string::npos;
     });
+}
+
+TEST(AttentiveEraserGraphTransform, IdentifiesUnetFromGraphInputContract) {
+    EXPECT_EQ(ov::genai::identify_attentive_eraser_unet(make_unet_contract_model(768, false)),
+              ov::genai::AttentiveEraserUNetType::SD15);
+    EXPECT_EQ(ov::genai::identify_attentive_eraser_unet(make_unet_contract_model(2048, true)),
+              ov::genai::AttentiveEraserUNetType::SDXL_BASE);
+
+    EXPECT_THROW(ov::genai::identify_attentive_eraser_unet(make_unet_contract_model(1024, false)), ov::Exception);
+    EXPECT_THROW(ov::genai::identify_attentive_eraser_unet(make_unet_contract_model(2048, false)), ov::Exception);
 }
 
 TEST(AttentiveEraserGraphTransform, MatchesAllSelfAttentionLayersBeforeChangingModel) {
