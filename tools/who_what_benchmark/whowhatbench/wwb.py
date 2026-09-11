@@ -282,6 +282,11 @@ def parse_args():
         help="Text-to-image/text-to-video specific parameter that defines the number of denoising steps.",
     )
     parser.add_argument(
+        "--attentive-eraser",
+        action="store_true",
+        help="Compare SDXL Attentive Eraser pipelines for image-inpainting.",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=42,
@@ -490,6 +495,12 @@ def check_args(args):
     if args.target_model is None and args.gt_data is None and args.target_data:
         raise ValueError(
             "Whether --target-model, --target-data or --gt-data should be provided")
+    if args.attentive_eraser and args.model_type != "image-inpainting":
+        raise ValueError("--attentive-eraser requires --model-type image-inpainting")
+    if args.attentive_eraser and args.base_model is not None and not args.hf:
+        raise ValueError("Attentive Eraser reference generation requires --hf")
+    if args.attentive_eraser and args.target_model is not None and not args.genai:
+        raise ValueError("Attentive Eraser target generation requires --genai")
     if (
         args.genai
         and args.model_type == "text-to-image"
@@ -882,6 +893,45 @@ def genai_gen_speech(model, prompt, speaker_embedding=None, language="", voice="
     return speech, sample_rate, text
 
 
+def diffusers_gen_attentive_eraser(model, prompt, image, mask, num_inference_steps, generator=None):
+    import torch
+    import torch.nn.functional as torch_functional
+    from torchvision.transforms.functional import gaussian_blur
+
+    image_array = np.array(image, copy=True)
+    image_tensor = torch.from_numpy(image_array).permute(2, 0, 1).unsqueeze(0).float() / 255.0
+    image_tensor = torch_functional.interpolate(image_tensor, (1024, 1024))
+    image_tensor = image_tensor.to(device=model.unet.device, dtype=model.unet.dtype)
+
+    mask_array = np.array(mask, copy=True)
+    if mask_array.ndim == 3:
+        mask_array = mask_array[..., 0]
+    mask_tensor = torch.from_numpy(mask_array).unsqueeze(0).unsqueeze(0).float() / 255.0
+    mask_tensor = torch_functional.interpolate(mask_tensor, (1024, 1024))
+    mask_tensor = gaussian_blur(mask_tensor, kernel_size=(77, 77))
+    mask_tensor = (mask_tensor >= 0.1).to(device=model.unet.device, dtype=model.unet.dtype)
+
+    with torch.no_grad():
+        output = model(
+            prompt="",
+            image=image_tensor,
+            mask_image=mask_tensor,
+            num_inference_steps=num_inference_steps,
+            generator=generator,
+            output_type="pil",
+            AAS=True,
+            strength=0.8,
+            guidance_scale=1.0,
+            rm_guidance_scale=9.0,
+            ss_steps=9,
+            ss_scale=0.3,
+            AAS_start_step=0,
+            AAS_start_layer=34,
+            AAS_end_layer=70,
+        )
+    return output.images[0]
+
+
 def genai_gen_inpainting(model, prompt, image, mask, num_inference_steps, generator=None):
     image_data = ov.Tensor(np.array(image)[None])
     mask_data = ov.Tensor(np.array(mask)[None])
@@ -890,6 +940,34 @@ def genai_gen_inpainting(model, prompt, image, mask, num_inference_steps, genera
         image=image_data,
         mask_image=mask_data,
         num_inference_steps=num_inference_steps,
+        generator=generator,
+    )
+    return Image.fromarray(image_tensor.data[0])
+
+
+def genai_gen_attentive_eraser(model, prompt, image, mask, num_inference_steps, generator=None):
+    import openvino_genai
+
+    attentive_eraser = openvino_genai.AttentiveEraserConfig()
+    attentive_eraser.rm_guidance_scale = 9.0
+    attentive_eraser.ss_steps = 9
+    attentive_eraser.start_step = 0
+    attentive_eraser.ss_scale = 0.3
+    attentive_eraser.mask_blur_kernel = 77
+
+    generation_config = model.get_generation_config()
+    generation_config.strength = 0.8
+    generation_config.guidance_scale = 1.0
+    generation_config.num_inference_steps = num_inference_steps
+    generation_config.attentive_eraser = attentive_eraser
+
+    image_data = ov.Tensor(np.array(image)[None])
+    mask_data = ov.Tensor(np.array(mask)[None])
+    image_tensor = model.generate(
+        "",
+        image=image_data,
+        mask_image=mask_data,
+        generation_config=generation_config,
         generator=generator,
     )
     return Image.fromarray(image_tensor.data[0])
@@ -1134,13 +1212,21 @@ def create_evaluator(base_model, args):
                 seed=args.seed,
             )
         elif task == "image-inpainting":
+            if args.attentive_eraser:
+                gen_image_fn = (
+                    genai_gen_attentive_eraser
+                    if args.genai
+                    else diffusers_gen_attentive_eraser
+                )
+            else:
+                gen_image_fn = genai_gen_inpainting if args.genai else None
             return EvaluatorCLS(
                 base_model=base_model,
                 gt_data=args.gt_data,
                 test_data=prompts,
                 num_samples=args.num_samples,
                 num_inference_steps=args.num_inference_steps,
-                gen_image_fn=genai_gen_inpainting if args.genai else None,
+                gen_image_fn=gen_image_fn,
                 is_genai=args.genai,
                 seed=args.seed,
             )
@@ -1470,6 +1556,8 @@ def main():
         kwargs["embeds_batch_size"] = args.embeds_batch_size
     if args.model_type == "text-to-image":
         kwargs["image_size"] = args.image_size
+    if args.attentive_eraser:
+        kwargs["attentive_eraser"] = True
 
     if args.draft_model is not None:
         kwargs["draft_model"] = args.draft_model
