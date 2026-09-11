@@ -73,6 +73,56 @@ def test_attentive_eraser_target_generation_requires_genai(monkeypatch):
         check_args(parse_args())
 
 
+@pytest.mark.parametrize("image_size", [64, 512, 2048])
+def test_attentive_eraser_rejects_unsupported_image_size(monkeypatch, image_size):
+    from whowhatbench.wwb import check_args, parse_args
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "wwb",
+            "--base-model",
+            "sdxl-base",
+            "--gt-data",
+            "reference.csv",
+            "--model-type",
+            "image-inpainting",
+            "--attentive-eraser",
+            "--hf",
+            "--image-size",
+            str(image_size),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="requires --image-size 1024"):
+        check_args(parse_args())
+
+
+@pytest.mark.parametrize("image_size_args", [[], ["--image-size", "1024"]])
+def test_attentive_eraser_accepts_default_or_1024_image_size(monkeypatch, image_size_args):
+    from whowhatbench.wwb import check_args, parse_args
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "wwb",
+            "--base-model",
+            "sdxl-base",
+            "--gt-data",
+            "reference.csv",
+            "--model-type",
+            "image-inpainting",
+            "--attentive-eraser",
+            "--hf",
+            *image_size_args,
+        ],
+    )
+
+    check_args(parse_args())
+
+
 @pytest.mark.parametrize(
     ("backend_flag", "expected_generation_fn"),
     [

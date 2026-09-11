@@ -126,9 +126,9 @@ wwb --base-model stabilityai/stable-diffusion-xl-base-1.0 --gt-data attentive_er
 wwb --target-model sdxl-base-openvino --gt-data attentive_eraser/gt.csv --model-type image-inpainting --attentive-eraser --genai --output attentive_eraser/results
 ```
 
-The comparison fixes `strength=0.8`, `guidance_scale=1.0`, `rm_guidance_scale=9.0`, `ss_steps=9`, `ss_scale=0.3`, AAS steps starting at 0, SDXL self-attention layers `[34,70)`, and mask blur kernel 77. Use `--seed` and `--num-inference-steps` to change the shared generation seed and denoising step count.
+The comparison fixes `strength=0.8`, `guidance_scale=1.0`, `rm_guidance_scale=9.0`, `ss_steps=9`, `ss_scale=0.3`, AAS steps starting at 0, SDXL self-attention layers `[34,70)`, and mask blur kernel 77. Use `--seed` and `--num-inference-steps` to change the shared generation seed and denoising step count. The image size defaults to 1024; `--image-size 1024` may be specified explicitly, while other sizes are rejected.
 
-> **Known limitation:** Attentive Eraser currently assumes the SDXL Base 1024x1024 input and 70-layer self-attention topology. End-to-end CI with reduced models such as `optimum-intel-internal-testing/tiny-random-stable-diffusion-xl` is deferred until the pipeline derives its input resolution, mask scales, and AAS layer selection from the loaded UNet.
+> **Known limitation:** The original Diffusers Attentive Eraser custom pipeline supports only 1024x1024 input. It hard-codes the mask pyramid and the 70-layer SDXL Base self-attention topology. WWB therefore rejects other image sizes to keep the Diffusers reference and OpenVINO GenAI target comparable. End-to-end CI with reduced models such as `optimum-intel-internal-testing/tiny-random-stable-diffusion-xl` is deferred until the upstream pipeline derives its input resolution, mask scales, and AAS layer selection from the loaded UNet.
 
 ### Compare Text-to-image models with LoRA
 ```sh

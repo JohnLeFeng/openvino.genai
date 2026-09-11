@@ -501,6 +501,8 @@ def check_args(args):
         raise ValueError("Attentive Eraser reference generation requires --hf")
     if args.attentive_eraser and args.target_model is not None and not args.genai:
         raise ValueError("Attentive Eraser target generation requires --genai")
+    if args.attentive_eraser and args.image_size is not None and args.image_size != 1024:
+        raise ValueError("Attentive Eraser requires --image-size 1024")
     if (
         args.genai
         and args.model_type == "text-to-image"
