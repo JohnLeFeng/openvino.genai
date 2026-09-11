@@ -112,6 +112,24 @@ wwb --base-model SimianLuo/LCM_Dreamshaper_v7 --gt-data lcm_test/gt.csv --model-
 wwb --target-model sd-lcm-int8 --gt-data lcm_test/gt.csv --model-type text-to-image --genai
 ```
 
+### Compare SDXL Attentive Eraser pipelines
+
+Attentive Eraser comparison uses the existing image-inpainting dataset and CLIP image similarity metric. Dataset captions remain in the result data as sample metadata, while both pipelines receive an empty prompt.
+
+Run the comparison in two stages because WWB selects one backend per invocation:
+
+```sh
+# Generate references with the official Diffusers SDXL Attentive Eraser pipeline.
+wwb --base-model stabilityai/stable-diffusion-xl-base-1.0 --gt-data attentive_eraser/gt.csv --model-type image-inpainting --attentive-eraser --hf
+
+# Compare an ordinary SDXL Base OpenVINO export using runtime AAS injection.
+wwb --target-model sdxl-base-openvino --gt-data attentive_eraser/gt.csv --model-type image-inpainting --attentive-eraser --genai --output attentive_eraser/results
+```
+
+The comparison fixes `strength=0.8`, `guidance_scale=1.0`, `rm_guidance_scale=9.0`, `ss_steps=9`, `ss_scale=0.3`, AAS steps starting at 0, SDXL self-attention layers `[34,70)`, and mask blur kernel 77. Use `--seed` and `--num-inference-steps` to change the shared generation seed and denoising step count. The image size defaults to 1024; `--image-size 1024` may be specified explicitly, while other sizes are rejected.
+
+> **Known limitation:** The original Diffusers Attentive Eraser custom pipeline supports only 1024x1024 input. It hard-codes the mask pyramid and the 70-layer SDXL Base self-attention topology. WWB therefore rejects other image sizes to keep the Diffusers reference and OpenVINO GenAI target comparable. End-to-end CI with reduced models such as `optimum-intel-internal-testing/tiny-random-stable-diffusion-xl` is deferred until the upstream pipeline derives its input resolution, mask scales, and AAS layer selection from the loaded UNet.
+
 ### Compare Text-to-image models with LoRA
 ```sh
 # Export FP16 model to OpenVINO
