@@ -269,7 +269,7 @@ For example:
 ./attentive_eraser_pipeline ./stable-diffusion-v1-5-ov source_image.png mask.png GPU 123
 ```
 
-The positive prompt is intentionally empty for object removal. When `HEIGHT` or `WIDTH` is omitted, that dimension is derived from the source image and rounded down to a multiple of 8. Explicit dimensions must be positive multiples of 8. A single compiled CPU or GPU pipeline can process sequential calls with different square or rectangular dimensions; Attentive Eraser supports one output image per prompt.
+The positive prompt is intentionally empty for object removal. When `HEIGHT` or `WIDTH` is omitted, that dimension uses the model default. Explicit dimensions must be positive multiples of 8. A single compiled CPU or GPU pipeline with dynamic spatial inputs can process sequential calls with different square or rectangular dimensions; static model IRs remain restricted to their compiled dimensions. Attentive Eraser supports one output image per prompt.
 
 The pipeline resizes the source image and mask independently to the requested output dimensions. Gaussian blur, mask binarization, latent-mask max pooling, and AAS runtime input updates remain internal pipeline operations. The generated image is saved as `object_removed_image.bmp`.
 

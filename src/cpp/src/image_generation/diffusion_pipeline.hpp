@@ -63,8 +63,6 @@ inline void apply_attentive_eraser_defaults(ImageGenerationConfig& generation_co
     generation_config.guidance_scale = 1.0f;
     generation_config.strength = 1.0f;
     generation_config.num_images_per_prompt = 1;
-    generation_config.height = -1;
-    generation_config.width = -1;
     generation_config.attentive_eraser = AttentiveEraserConfig{};
 }
 

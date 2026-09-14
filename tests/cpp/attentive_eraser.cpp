@@ -211,8 +211,8 @@ TEST(AttentiveEraserConfigTest, UsesFullDenoisingStrengthForEveryModelFamily) {
     EXPECT_FLOAT_EQ(config.strength, 1.0f);
     EXPECT_FLOAT_EQ(config.guidance_scale, 1.0f);
     EXPECT_EQ(config.num_images_per_prompt, 1);
-    EXPECT_EQ(config.height, -1);
-    EXPECT_EQ(config.width, -1);
+    EXPECT_EQ(config.height, 512);
+    EXPECT_EQ(config.width, 512);
     EXPECT_TRUE(config.attentive_eraser.has_value());
 }
 
