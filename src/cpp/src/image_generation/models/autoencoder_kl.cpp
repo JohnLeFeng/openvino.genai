@@ -268,8 +268,12 @@ AutoencoderKL& AutoencoderKL::reshape(int batch_size, int height, int width) {
         m_encoder_model->reshape(idx_to_shape);
     }
 
-    height /= vae_scale_factor;
-    width /= vae_scale_factor;
+    if (height >= 0) {
+        height /= vae_scale_factor;
+    }
+    if (width >= 0) {
+        width /= vae_scale_factor;
+    }
 
     ov::PartialShape input_shape = m_decoder_model->input(0).get_partial_shape();
     std::map<size_t, ov::PartialShape> idx_to_shape{{0, {batch_size, input_shape[1], height, width}}};

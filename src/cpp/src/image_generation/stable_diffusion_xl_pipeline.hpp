@@ -222,8 +222,13 @@ public:
         m_clip_text_encoder->reshape(batch_size_multiplier);
         m_clip_text_encoder_with_projection->reshape(batch_size_multiplier);
 
-        m_unet->reshape(num_images_per_prompt * batch_size_multiplier, height, width, m_clip_text_encoder->get_config().max_position_embeddings);
-        m_vae->reshape(num_images_per_prompt, height, width);
+        const int model_height = m_use_attentive_eraser ? -1 : height;
+        const int model_width = m_use_attentive_eraser ? -1 : width;
+        m_unet->reshape(num_images_per_prompt * batch_size_multiplier,
+                model_height,
+                model_width,
+                m_clip_text_encoder->get_config().max_position_embeddings);
+        m_vae->reshape(num_images_per_prompt, model_height, model_width);
     }
 
     void compile(const std::string& text_encode_device,

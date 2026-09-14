@@ -33,7 +33,12 @@ std::shared_ptr<ov::Model> make_attention_model(size_t self_attention_count) {
     using namespace ov::opset13;
 
     ov::ResultVector results;
-    auto self_qkv = Constant::create(ov::element::f32, {2, 2, 4, 3}, {0.1f});
+    auto feature_map = Constant::create(ov::element::f32, {2, 3, 2, 2}, {0.1f});
+    auto nhwc = std::make_shared<Transpose>(feature_map, Constant::create(ov::element::i32, {4}, {0, 2, 3, 1}));
+    auto tokens = std::make_shared<Reshape>(nhwc,
+                                            Constant::create(ov::element::i32, {3}, {2, -1, 3}),
+                                            false);
+    auto self_qkv = std::make_shared<Unsqueeze>(tokens, Constant::create(ov::element::i32, {1}, {1}));
     auto cross_kv = Constant::create(ov::element::f32, {2, 2, 77, 3}, {0.1f});
 
     for (size_t index = 0; index < self_attention_count; ++index) {
@@ -54,16 +59,82 @@ std::shared_ptr<ov::Model> make_attention_model(size_t self_attention_count) {
 std::shared_ptr<ov::Model> make_runtime_attention_model() {
     using namespace ov::opset13;
 
-    auto qkv = std::make_shared<Parameter>(ov::element::f32, ov::Shape{2, 1, 4, 1});
+    auto qkv = std::make_shared<Parameter>(ov::element::f32, ov::Shape{2, 1, 2, 2});
     qkv->set_friendly_name("qkv");
     qkv->output(0).get_tensor().set_names({"qkv"});
+    auto nhwc = std::make_shared<Transpose>(qkv, Constant::create(ov::element::i32, {4}, {0, 2, 3, 1}));
+    auto tokens = std::make_shared<Reshape>(nhwc,
+                                            Constant::create(ov::element::i32, {3}, {2, -1, 1}),
+                                            false);
+    auto attention_qkv = std::make_shared<Unsqueeze>(tokens, Constant::create(ov::element::i32, {1}, {1}));
+    ov::ResultVector results;
+    for (size_t index = 0; index < 16; ++index) {
+        auto attention = std::make_shared<ScaledDotProductAttention>(attention_qkv, attention_qkv, attention_qkv, false);
+        attention->set_friendly_name("block." + std::to_string(index) + ".attn1/ScaledDotProductAttention");
+        results.push_back(std::make_shared<Result>(attention));
+    }
+    return std::make_shared<ov::Model>(results, ov::ParameterVector{qkv});
+}
+
+std::shared_ptr<ov::Model> make_dynamic_spatial_attention_model() {
+    using namespace ov::opset13;
+
+    auto feature_map = std::make_shared<Parameter>(
+        ov::element::f32,
+        ov::PartialShape{2, 1, ov::Dimension::dynamic(), ov::Dimension::dynamic()});
+    feature_map->set_friendly_name("feature_map");
+    feature_map->output(0).get_tensor().set_names({"feature_map"});
+    auto nhwc = std::make_shared<Transpose>(feature_map, Constant::create(ov::element::i32, {4}, {0, 2, 3, 1}));
+    auto tokens = std::make_shared<Reshape>(nhwc,
+                                            Constant::create(ov::element::i32, {3}, {2, -1, 1}),
+                                            false);
+    auto qkv = std::make_shared<Unsqueeze>(tokens, Constant::create(ov::element::i32, {1}, {1}));
+
     ov::ResultVector results;
     for (size_t index = 0; index < 16; ++index) {
         auto attention = std::make_shared<ScaledDotProductAttention>(qkv, qkv, qkv, false);
         attention->set_friendly_name("block." + std::to_string(index) + ".attn1/ScaledDotProductAttention");
         results.push_back(std::make_shared<Result>(attention));
     }
-    return std::make_shared<ov::Model>(results, ov::ParameterVector{qkv});
+    return std::make_shared<ov::Model>(results, ov::ParameterVector{feature_map});
+}
+
+std::shared_ptr<ov::Model> make_deep_dynamic_spatial_attention_model() {
+    using namespace ov::opset13;
+
+    auto feature_map = std::make_shared<Parameter>(
+        ov::element::f32,
+        ov::PartialShape{2, 1, ov::Dimension::dynamic(), ov::Dimension::dynamic()});
+    auto nhwc = std::make_shared<Transpose>(feature_map, Constant::create(ov::element::i32, {4}, {0, 2, 3, 1}));
+    ov::Output<ov::Node> tokens = std::make_shared<Reshape>(
+        nhwc,
+        Constant::create(ov::element::i32, {3}, {2, -1, 1}),
+        false);
+    for (size_t index = 0; index < 17; ++index) {
+        tokens = std::make_shared<Add>(tokens, Constant::create(ov::element::f32, {}, {0.0f}));
+    }
+    auto qkv = std::make_shared<Unsqueeze>(tokens, Constant::create(ov::element::i32, {1}, {1}));
+
+    ov::ResultVector results;
+    for (size_t index = 0; index < 16; ++index) {
+        auto attention = std::make_shared<ScaledDotProductAttention>(qkv, qkv, qkv, false);
+        attention->set_friendly_name("block." + std::to_string(index) + ".attn1/ScaledDotProductAttention");
+        results.push_back(std::make_shared<Result>(attention));
+    }
+    return std::make_shared<ov::Model>(results, ov::ParameterVector{feature_map});
+}
+
+std::shared_ptr<ov::Model> make_attention_model_without_spatial_shape() {
+    using namespace ov::opset13;
+
+    auto qkv = Constant::create(ov::element::f32, {2, 2, 4, 3}, {0.1f});
+    ov::ResultVector results;
+    for (size_t index = 0; index < 16; ++index) {
+        auto attention = std::make_shared<ScaledDotProductAttention>(qkv, qkv, qkv, false);
+        attention->set_friendly_name("block." + std::to_string(index) + ".attn1/ScaledDotProductAttention");
+        results.push_back(std::make_shared<Result>(attention));
+    }
+    return std::make_shared<ov::Model>(results, ov::ParameterVector{});
 }
 
 size_t count_named_self_attention_nodes(const std::shared_ptr<ov::Model>& model) {
@@ -110,7 +181,8 @@ TEST(AttentiveEraserGraphTransform, TransformsStrictSdxlTopologyFromLayer34) {
     ov::genai::apply_attentive_eraser_aas(complete_model, selected_layers);
 
     EXPECT_EQ(count_named_self_attention_nodes(complete_model), 34);
-    EXPECT_EQ(complete_model->input("aas_mask").get_partial_shape(), ov::PartialShape({1, 1, 1024, 1024}));
+    EXPECT_EQ(complete_model->input("aas_mask").get_partial_shape(),
+              ov::PartialShape({1, 1, ov::Dimension::dynamic(), ov::Dimension::dynamic()}));
 
     auto incomplete_model = make_attention_model(69);
     EXPECT_THROW(ov::genai::apply_attentive_eraser_aas(incomplete_model, selected_layers), ov::Exception);
@@ -139,13 +211,19 @@ TEST(AttentiveEraserGraphTransform, RejectsLegacyPreconvertedUnetBeforeChangingM
     EXPECT_EQ(model->input().get_any_name(), "mask");
 }
 
+TEST(AttentiveEraserGraphTransform, RejectsSelfAttentionWithoutSpatialShape) {
+    auto model = make_attention_model_without_spatial_shape();
+
+    EXPECT_THROW(ov::genai::apply_attentive_eraser_aas(model, {0}), ov::Exception);
+}
+
 TEST(AttentiveEraserGraphTransform, AppliesMaskAndSoftmaxScalingToSelectedLayer) {
     auto model = make_runtime_attention_model();
     ov::genai::apply_attentive_eraser_aas(model, {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15});
     auto compiled = ov::genai::utils::singleton_core().compile_model(model, "CPU");
     auto request = compiled.create_infer_request();
 
-    ov::Tensor qkv{ov::element::f32, {2, 1, 4, 1}};
+    ov::Tensor qkv{ov::element::f32, {2, 1, 2, 2}};
     std::copy_n(std::array<float, 8>{1, 2, 3, 4, 1, 2, 3, 4}.begin(), 8, qkv.data<float>());
     ov::Tensor mask{ov::element::f32, {1, 1, 512, 512}};
     std::fill_n(mask.data<float>(), mask.get_size(), 0.0f);
@@ -175,6 +253,42 @@ TEST(AttentiveEraserGraphTransform, AppliesMaskAndSoftmaxScalingToSelectedLayer)
     const auto* inactive_values = inactive_output.data<const float>();
     EXPECT_NEAR(inactive_values[4], 3.49265f, 1e-3f);
     EXPECT_NEAR(inactive_values[6], 3.94763f, 1e-3f);
+}
+
+TEST(AttentiveEraserGraphTransform, PreservesRectangularSpatialLayoutAcrossCalls) {
+    auto model = make_dynamic_spatial_attention_model();
+    ov::genai::apply_attentive_eraser_aas(model, {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15});
+    auto compiled = ov::genai::utils::singleton_core().compile_model(model, "CPU");
+    auto request = compiled.create_infer_request();
+
+    ov::Tensor aas_active{ov::element::f32, {}};
+    ov::Tensor ss_active{ov::element::f32, {}};
+    ov::Tensor ss_scale{ov::element::f32, {}};
+    aas_active.data<float>()[0] = 1.0f;
+    ss_active.data<float>()[0] = 1.0f;
+    ss_scale.data<float>()[0] = 0.5f;
+    request.set_tensor("aas_active", aas_active);
+    request.set_tensor("ss_active", ss_active);
+    request.set_tensor("ss_scale", ss_scale);
+
+    for (const auto& spatial_shape : {ov::Shape{4, 6}, ov::Shape{6, 4}, ov::Shape{4, 6}}) {
+        ov::Tensor feature_map{ov::element::f32, {2, 1, spatial_shape[0], spatial_shape[1]}};
+        std::fill_n(feature_map.data<float>(), feature_map.get_size(), 0.1f);
+        ov::Tensor mask{ov::element::f32, {1, 1, spatial_shape[0], spatial_shape[1]}};
+        std::fill_n(mask.data<float>(), mask.get_size(), 0.0f);
+        request.set_tensor("feature_map", feature_map);
+        request.set_tensor("aas_mask", mask);
+
+        ASSERT_NO_THROW(request.infer());
+        EXPECT_EQ(request.get_output_tensor(0).get_shape(),
+                  (ov::Shape{2, 1, spatial_shape[0] * spatial_shape[1], 1}));
+    }
+}
+
+TEST(AttentiveEraserGraphTransform, TracesSpatialShapeAcrossDeepTransformerBlocks) {
+    auto model = make_deep_dynamic_spatial_attention_model();
+
+    EXPECT_NO_THROW(ov::genai::apply_attentive_eraser_aas(model, {0}));
 }
 
 }  // namespace

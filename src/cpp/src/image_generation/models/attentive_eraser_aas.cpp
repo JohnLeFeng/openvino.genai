@@ -9,6 +9,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <unordered_set>
 
 #include "openvino/core/except.hpp"
 #include "openvino/core/graph_util.hpp"
@@ -53,6 +54,42 @@ float lowest_finite_value(const ov::element::Type& type) {
         return -3.38953139e38f;
     }
     return std::numeric_limits<float>::lowest();
+}
+
+std::optional<ov::Output<ov::Node>> find_spatial_shape(const ov::Output<ov::Node>& query) {
+    using namespace ov::opset13;
+
+    std::vector<std::shared_ptr<ov::Node>> pending{query.get_node_shared_ptr()};
+    std::unordered_set<const ov::Node*> visited;
+    while (!pending.empty()) {
+        auto node = pending.back();
+        pending.pop_back();
+        if (!node || !visited.insert(node.get()).second) {
+            continue;
+        }
+
+        if (const auto reshape = ov::as_type_ptr<Reshape>(node)) {
+            const auto input_shape = reshape->get_input_partial_shape(0);
+            const auto output_shape = reshape->get_output_partial_shape(0);
+            const auto transpose = ov::as_type_ptr<Transpose>(reshape->get_input_node_shared_ptr(0));
+            if (input_shape.rank().compatible(4) && output_shape.rank().compatible(3) && transpose) {
+                const auto order = ov::as_type_ptr<Constant>(transpose->get_input_node_shared_ptr(1));
+                if (order && order->cast_vector<int64_t>() == std::vector<int64_t>{0, 2, 3, 1}) {
+                    auto source_shape = std::make_shared<ShapeOf>(transpose->input_value(0), ov::element::i32);
+                    return std::make_shared<Gather>(source_shape,
+                                                    Constant::create(ov::element::i32, {2}, {2, 3}),
+                                                    Constant::create(ov::element::i32, {}, {0}));
+                }
+            }
+        }
+
+        for (const auto& input : node->inputs()) {
+            if (!ov::is_type<Constant>(input.get_source_output().get_node_shared_ptr())) {
+                pending.push_back(input.get_source_output().get_node_shared_ptr());
+            }
+        }
+    }
+    return std::nullopt;
 }
 
 ov::Output<ov::Node> attention(const ov::Output<ov::Node>& query,
@@ -135,10 +172,18 @@ void apply_attentive_eraser_aas(const std::shared_ptr<ov::Model>& model,
                     }),
                     "Attentive Eraser AAS layer indices must be in [0, ", self_attention_count, ")");
 
-    const size_t mask_size = self_attention_count == SDXL_SELF_ATTENTION_COUNT ? 1024 : 512;
+    std::vector<std::optional<ov::Output<ov::Node>>> spatial_shapes(self_attention_count);
+    for (const size_t index : layer_indices) {
+        const auto& attention = self_attention_layers[index];
+        spatial_shapes[index] = find_spatial_shape(attention->input_value(0));
+        OPENVINO_ASSERT(spatial_shapes[index],
+                        "Cannot determine spatial height and width for Attentive Eraser self-attention layer '",
+                        attention->get_friendly_name(),
+                        "'");
+    }
 
     ov::ParameterVector runtime_parameters{
-        make_parameter("aas_mask", {1, 1, mask_size, mask_size}),
+        make_parameter("aas_mask", {1, 1, ov::Dimension::dynamic(), ov::Dimension::dynamic()}),
         make_parameter("aas_active", {}),
         make_parameter("ss_active", {}),
         make_parameter("ss_scale", {}),
@@ -170,17 +215,8 @@ void apply_attentive_eraser_aas(const std::shared_ptr<ov::Model>& model,
         auto key_split = std::make_shared<Split>(original->input_value(1), batch_axis, 2);
         auto value_split = std::make_shared<Split>(original->input_value(2), batch_axis, 2);
 
-        auto query_shape_node = std::make_shared<ShapeOf>(original->input_value(0), ov::element::i32);
-        auto token_count = std::make_shared<Gather>(query_shape_node,
-                                Constant::create(ov::element::i32, {}, {2}),
-                                Constant::create(ov::element::i32, {}, {0}));
-        auto side_f32 = std::make_shared<Sqrt>(std::make_shared<Convert>(token_count, ov::element::f32));
-        auto side = std::make_shared<Convert>(side_f32, ov::element::i32);
-        auto side_vector = std::make_shared<Unsqueeze>(side, Constant::create(ov::element::i32, {1}, {0}));
         auto pooled_mask = std::make_shared<AdaptiveMaxPool>(mask,
-                                                            std::make_shared<Concat>(ov::OutputVector{side_vector,
-                                                                                                    side_vector},
-                                                                                     0),
+                                                            *spatial_shapes[index],
                                                             ov::element::i32);
         auto key_mask = std::make_shared<Reshape>(pooled_mask->output(0),
                                                                                                     Constant::create(ov::element::i32, {4}, {1, 1, 1, -1}),

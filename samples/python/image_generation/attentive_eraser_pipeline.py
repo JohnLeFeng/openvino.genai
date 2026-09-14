@@ -22,6 +22,8 @@ def main():
     parser.add_argument("mask_image", metavar="MASK_IMAGE")
     parser.add_argument("device", metavar="DEVICE", nargs="?", default="CPU")
     parser.add_argument("seed", metavar="SEED", nargs="?", type=int, default=123)
+    parser.add_argument("--height", type=int, default=None)
+    parser.add_argument("--width", type=int, default=None)
     args = parser.parse_args()
 
     pipeline = openvino_genai.InpaintingPipeline(
@@ -42,6 +44,10 @@ def main():
     config.num_inference_steps = 50
     config.rng_seed = args.seed
     config.attentive_eraser = attentive_eraser
+    if args.height is not None:
+        config.height = args.height
+    if args.width is not None:
+        config.width = args.width
     pipeline.set_generation_config(config)
 
     def callback(step, num_steps, latent):

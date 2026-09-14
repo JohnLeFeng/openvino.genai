@@ -103,8 +103,12 @@ const UNet2DConditionModel::Config& UNet2DConditionModel::get_config() const {
 UNet2DConditionModel& UNet2DConditionModel::reshape(int batch_size, int height, int width, int tokenizer_model_max_length) {
     OPENVINO_ASSERT(m_model, "Model has been already compiled. Cannot reshape already compiled model");
 
-    height /= m_vae_scale_factor;
-    width /= m_vae_scale_factor;
+    if (height >= 0) {
+        height /= m_vae_scale_factor;
+    }
+    if (width >= 0) {
+        width /= m_vae_scale_factor;
+    }
 
     UNetInference::reshape(m_model, batch_size, height, width, tokenizer_model_max_length);
 
@@ -134,8 +138,9 @@ UNet2DConditionModel& UNet2DConditionModel::compile(const std::string& device, c
                             m_config.sample_size == 64) ||
              (unet_type == AttentiveEraserUNetType::SDXL_BASE && m_config.sample_size == 128));
         OPENVINO_ASSERT(has_supported_config,
-                                                "Attentive Eraser AAS supports only 512x512 Stable Diffusion 1.5/2 or "
-                        "1024x1024 SDXL Base UNets");
+                "Attentive Eraser AAS supports only Stable Diffusion 1.5/2 UNets with sample_size 64 or "
+                "SDXL Base UNets with sample_size 128");
+        UNetInference::reshape(m_model, std::nullopt, -1, -1, std::nullopt);
         const auto layer_indices = aas_iter->second.as<std::vector<size_t>>();
         plugin_properties.erase(aas_iter);
         apply_attentive_eraser_aas(m_model, layer_indices);

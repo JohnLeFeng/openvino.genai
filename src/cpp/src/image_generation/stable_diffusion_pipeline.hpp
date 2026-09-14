@@ -191,8 +191,13 @@ public:
         const size_t batch_size_multiplier =
             m_use_attentive_eraser || m_unet->do_classifier_free_guidance(guidance_scale) ? 2 : 1;
         m_clip_text_encoder->reshape(batch_size_multiplier);
-        m_unet->reshape(num_images_per_prompt * batch_size_multiplier, height, width, m_clip_text_encoder->get_config().max_position_embeddings);
-        m_vae->reshape(num_images_per_prompt, height, width);
+        const int model_height = m_use_attentive_eraser ? -1 : height;
+        const int model_width = m_use_attentive_eraser ? -1 : width;
+        m_unet->reshape(num_images_per_prompt * batch_size_multiplier,
+                        model_height,
+                        model_width,
+                        m_clip_text_encoder->get_config().max_position_embeddings);
+        m_vae->reshape(num_images_per_prompt, model_height, model_width);
     }
 
     void compile(const std::string& text_encode_device,
@@ -395,13 +400,7 @@ public:
             compute_dim(generation_config.width, initial_image, 2 /* assume NHWC */);
 
         if (is_attentive) {
-            const int64_t model_image_size = static_cast<int64_t>(unet_config.sample_size * vae_scale_factor);
-            OPENVINO_ASSERT(model_image_size == 512 || model_image_size == 1024,
-                            "Attentive eraser mode supports only 512x512 SD1.5/SD2 or 1024x1024 SDXL Base UNets");
-            OPENVINO_ASSERT(generation_config.height == model_image_size &&
-                                generation_config.width == model_image_size,
-                            "Attentive eraser height and width must match the UNet image size of ",
-                            model_image_size);
+            check_image_size(generation_config.height, generation_config.width);
         } else {
             check_inputs(generation_config, initial_image);
             set_lora_adapters(generation_config.adapters);
