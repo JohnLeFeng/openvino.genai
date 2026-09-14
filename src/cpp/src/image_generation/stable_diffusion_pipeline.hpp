@@ -397,10 +397,8 @@ public:
         if (generation_config.width < 0)
             compute_dim(generation_config.width, initial_image, 2 /* assume NHWC */);
 
-        if (is_attentive) {
-            check_image_size(generation_config.height, generation_config.width);
-        } else {
-            check_inputs(generation_config, initial_image);
+        check_inputs(generation_config, initial_image);
+        if (!is_attentive) {
             set_lora_adapters(generation_config.adapters);
         }
 
