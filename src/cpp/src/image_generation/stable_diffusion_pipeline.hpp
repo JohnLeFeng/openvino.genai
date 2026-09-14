@@ -191,13 +191,11 @@ public:
         const size_t batch_size_multiplier =
             m_use_attentive_eraser || m_unet->do_classifier_free_guidance(guidance_scale) ? 2 : 1;
         m_clip_text_encoder->reshape(batch_size_multiplier);
-        const int model_height = m_use_attentive_eraser ? -1 : height;
-        const int model_width = m_use_attentive_eraser ? -1 : width;
         m_unet->reshape(num_images_per_prompt * batch_size_multiplier,
-                        model_height,
-                        model_width,
+                        height,
+                        width,
                         m_clip_text_encoder->get_config().max_position_embeddings);
-        m_vae->reshape(num_images_per_prompt, model_height, model_width);
+        m_vae->reshape(num_images_per_prompt, height, width);
     }
 
     void compile(const std::string& text_encode_device,
