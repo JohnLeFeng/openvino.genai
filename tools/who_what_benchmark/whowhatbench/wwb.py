@@ -6,7 +6,6 @@ import difflib
 import numpy as np
 import logging
 import os
-from functools import partial
 from pathlib import Path
 from itertools import zip_longest
 
@@ -274,7 +273,7 @@ def parse_args():
         "--image-size",
         type=int,
         default=None,
-        help="Image generation parameter that defines the square output resolution.",
+        help="Text-to-image specific parameter that defines the image resolution.",
     )
     parser.add_argument(
         "--num-inference-steps",
@@ -502,12 +501,8 @@ def check_args(args):
         raise ValueError("Attentive Eraser reference generation requires --hf")
     if args.attentive_eraser and args.target_model is not None and not args.genai:
         raise ValueError("Attentive Eraser target generation requires --genai")
-    if (
-        args.attentive_eraser
-        and args.image_size is not None
-        and (args.image_size <= 0 or args.image_size % 8 != 0)
-    ):
-        raise ValueError("Attentive Eraser --image-size must be a positive multiple of 8")
+    if args.attentive_eraser and args.image_size is not None and args.image_size != 1024:
+        raise ValueError("Attentive Eraser requires --image-size 1024")
     if (
         args.genai
         and args.model_type == "text-to-image"
@@ -900,24 +895,21 @@ def genai_gen_speech(model, prompt, speaker_embedding=None, language="", voice="
     return speech, sample_rate, text
 
 
-def diffusers_gen_attentive_eraser(
-    model, prompt, image, mask, num_inference_steps, generator=None, image_size=None
-):
+def diffusers_gen_attentive_eraser(model, prompt, image, mask, num_inference_steps, generator=None):
     import torch
     import torch.nn.functional as torch_functional
     from torchvision.transforms.functional import gaussian_blur
 
     image_array = np.array(image, copy=True)
     image_tensor = torch.from_numpy(image_array).permute(2, 0, 1).unsqueeze(0).float() / 255.0
-    target_size = (image_size, image_size) if image_size is not None else image_tensor.shape[-2:]
-    image_tensor = torch_functional.interpolate(image_tensor, target_size)
+    image_tensor = torch_functional.interpolate(image_tensor, (1024, 1024))
     image_tensor = image_tensor.to(device=model.unet.device, dtype=model.unet.dtype)
 
     mask_array = np.array(mask, copy=True)
     if mask_array.ndim == 3:
         mask_array = mask_array[..., 0]
     mask_tensor = torch.from_numpy(mask_array).unsqueeze(0).unsqueeze(0).float() / 255.0
-    mask_tensor = torch_functional.interpolate(mask_tensor, target_size)
+    mask_tensor = torch_functional.interpolate(mask_tensor, (1024, 1024))
     mask_tensor = gaussian_blur(mask_tensor, kernel_size=(77, 77))
     mask_tensor = (mask_tensor >= 0.1).to(device=model.unet.device, dtype=model.unet.dtype)
 
@@ -955,9 +947,7 @@ def genai_gen_inpainting(model, prompt, image, mask, num_inference_steps, genera
     return Image.fromarray(image_tensor.data[0])
 
 
-def genai_gen_attentive_eraser(
-    model, prompt, image, mask, num_inference_steps, generator=None, image_size=None
-):
+def genai_gen_attentive_eraser(model, prompt, image, mask, num_inference_steps, generator=None):
     import openvino_genai
 
     attentive_eraser = openvino_genai.AttentiveEraserConfig()
@@ -972,9 +962,6 @@ def genai_gen_attentive_eraser(
     generation_config.guidance_scale = 1.0
     generation_config.num_inference_steps = num_inference_steps
     generation_config.attentive_eraser = attentive_eraser
-    if image_size is not None:
-        generation_config.height = image_size
-        generation_config.width = image_size
 
     image_data = ov.Tensor(np.array(image)[None])
     mask_data = ov.Tensor(np.array(mask)[None])
@@ -1228,12 +1215,11 @@ def create_evaluator(base_model, args):
             )
         elif task == "image-inpainting":
             if args.attentive_eraser:
-                attentive_eraser_fn = (
+                gen_image_fn = (
                     genai_gen_attentive_eraser
                     if args.genai
                     else diffusers_gen_attentive_eraser
                 )
-                gen_image_fn = partial(attentive_eraser_fn, image_size=args.image_size)
             else:
                 gen_image_fn = genai_gen_inpainting if args.genai else None
             return EvaluatorCLS(
