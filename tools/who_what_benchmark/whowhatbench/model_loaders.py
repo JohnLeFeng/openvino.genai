@@ -697,15 +697,19 @@ def load_imagetext2image_model(
     return model
 
 
-def load_inpainting_genai_pipeline(model_dir, device="CPU", ov_config=None):
+def load_inpainting_genai_pipeline(model_dir, device="CPU", ov_config=None, attentive_eraser=False):
     try:
         import openvino_genai
     except ImportError as e:
         logger.error("Failed to import openvino_genai package. Please install it. Details:\n", e)
         exit(-1)
 
+    pipeline_options = dict(ov_config or {})
+    if attentive_eraser:
+        pipeline_options["inpainting_mode"] = openvino_genai.InpaintingMode.ATTENTIVE_ERASER
+
     return GenAIModelWrapper(
-        openvino_genai.InpaintingPipeline(model_dir, device, **ov_config),
+        openvino_genai.InpaintingPipeline(model_dir, device, **pipeline_options),
         model_dir,
         "image-inpainting"
     )
@@ -714,14 +718,49 @@ def load_inpainting_genai_pipeline(model_dir, device="CPU", ov_config=None):
 def load_inpainting_model(
     model_id, device="CPU", ov_config=None, use_hf=False, use_genai=False, **kwargs
 ):
-    if use_hf:
-        from diffusers import AutoPipelineForInpainting
+    if kwargs.get("attentive_eraser"):
+        if not use_hf and not use_genai:
+            raise ValueError("Attentive Eraser requires the HF or GenAI backend")
 
+        from diffusers import DiffusionPipeline
+
+        model_config = DiffusionPipeline.load_config(model_id)
+        model_class = model_config.get("_class_name")
+        if model_class != "StableDiffusionXLPipeline":
+            raise ValueError(
+                f"Attentive Eraser requires an SDXL Base model, got {model_class!r}"
+            )
+
+    if use_hf:
         logger.info("Using HF Transformers API")
-        model = AutoPipelineForInpainting.from_pretrained(model_id, trust_remote_code=True, torch_dtype=torch.float32)
+        if kwargs.get("attentive_eraser"):
+            from diffusers import DDIMScheduler, DiffusionPipeline
+
+            model = DiffusionPipeline.from_pretrained(
+                model_id,
+                custom_pipeline="pipeline_stable_diffusion_xl_attentive_eraser",
+                custom_revision="0.39.0",
+                scheduler=DDIMScheduler.from_pretrained(model_id, subfolder="scheduler"),
+                torch_dtype=torch.float32,
+                use_safetensors=True,
+                variant="fp16",
+            )
+        else:
+            from diffusers import AutoPipelineForInpainting
+
+            model = AutoPipelineForInpainting.from_pretrained(
+                model_id,
+                trust_remote_code=True,
+                torch_dtype=torch.float32,
+            )
     elif use_genai:
         logger.info("Using OpenVINO GenAI API")
-        model = load_inpainting_genai_pipeline(model_id, device, ov_config)
+        model = load_inpainting_genai_pipeline(
+            model_id,
+            device,
+            ov_config,
+            attentive_eraser=kwargs.get("attentive_eraser", False),
+        )
     else:
         logger.info("Using Optimum API")
         from optimum.intel.openvino import OVPipelineForInpainting
