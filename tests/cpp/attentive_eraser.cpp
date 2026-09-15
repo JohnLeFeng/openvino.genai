@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <type_traits>
@@ -202,12 +203,16 @@ TEST(AttentiveEraserPipelineTest, RejectsCustomSdxlModelIdentity) {
 TEST(AttentiveEraserConfigTest, UsesFullDenoisingStrengthForEveryModelFamily) {
     ov::genai::ImageGenerationConfig config;
     config.strength = 0.9999f;
+    config.height = 512;
+    config.width = 512;
 
     ov::genai::apply_attentive_eraser_defaults(config);
 
     EXPECT_FLOAT_EQ(config.strength, 1.0f);
     EXPECT_FLOAT_EQ(config.guidance_scale, 1.0f);
     EXPECT_EQ(config.num_images_per_prompt, 1);
+    EXPECT_EQ(config.height, 512);
+    EXPECT_EQ(config.width, 512);
     EXPECT_TRUE(config.attentive_eraser.has_value());
 }
 
@@ -248,6 +253,56 @@ TEST(AttentiveEraserConfigTest, UsesConfiguredAasStepBoundaries) {
     EXPECT_FALSE(ov::genai::is_attentive_eraser_aas_active(40, 4, 0.8f, 50));
     EXPECT_TRUE(ov::genai::is_attentive_eraser_ss_active(9, 9));
     EXPECT_FALSE(ov::genai::is_attentive_eraser_ss_active(10, 9));
+}
+
+TEST(AttentiveEraserModelTest, GeneratesSequentialDynamicSizesWithOnePipeline) {
+    const char* model_path = std::getenv("ATTENTIVE_ERASER_MODEL_PATH");
+    if (!model_path) {
+        GTEST_SKIP() << "ATTENTIVE_ERASER_MODEL_PATH is not set";
+    }
+    const char* requested_device = std::getenv("ATTENTIVE_ERASER_DEVICE");
+    const std::string device = requested_device ? requested_device : "CPU";
+    ov::genai::InpaintingPipeline pipeline(
+        model_path,
+        device,
+        ov::genai::inpainting_mode(ov::genai::InpaintingMode::ATTENTIVE_ERASER));
+
+    ov::Tensor image(ov::element::u8, {1, 512, 512, 3});
+    ov::Tensor mask(ov::element::u8, {1, 512, 512, 3});
+    std::fill_n(image.data<uint8_t>(), image.get_size(), uint8_t{127});
+    std::fill_n(mask.data<uint8_t>(), mask.get_size(), uint8_t{0});
+
+    const std::array<std::pair<int64_t, int64_t>, 4> sizes{{
+        {512, 512},
+        {768, 512},
+        {512, 768},
+        {512, 512},
+    }};
+    std::vector<uint8_t> first_output;
+    for (const auto& [height, width] : sizes) {
+        auto config = pipeline.get_generation_config();
+        config.height = height;
+        config.width = width;
+        config.strength = 0.8f;
+        config.num_inference_steps = 2;
+        config.rng_seed = 123;
+        pipeline.set_generation_config(config);
+
+        ov::Tensor output = pipeline.generate("", image, mask);
+        ASSERT_EQ(output.get_shape(), ov::Shape({1, static_cast<size_t>(height), static_cast<size_t>(width), 3}));
+        ASSERT_EQ(output.get_element_type(), ov::element::u8);
+        if (first_output.empty()) {
+            first_output.assign(output.data<const uint8_t>(), output.data<const uint8_t>() + output.get_size());
+        } else if (height == 512 && width == 512) {
+            int max_difference = 0;
+            for (size_t index = 0; index < output.get_size(); ++index) {
+                max_difference = std::max(
+                    max_difference,
+                    std::abs(static_cast<int>(output.data<const uint8_t>()[index]) - first_output[index]));
+            }
+            EXPECT_LE(max_difference, device == "CPU" ? 0 : 2);
+        }
+    }
 }
 
 }  // namespace

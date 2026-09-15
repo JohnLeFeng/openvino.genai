@@ -31,6 +31,8 @@ class TestAttentiveEraser:
         )
 
         assert "MODEL_DIR IMAGE MASK_IMAGE [DEVICE] [SEED]" in result.stdout
+        assert "--height HEIGHT" in result.stdout
+        assert "--width WIDTH" in result.stdout
 
     @pytest.mark.samples
     def test_python_sample_uses_rgb_loader_for_image_and_mask(self, tmp_path):

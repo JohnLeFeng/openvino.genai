@@ -251,7 +251,7 @@ Note, that LoRA, heterogeneous execution and other features of `Text2ImagePipeli
 
 ## Run Attentive Eraser through the inpainting pipeline
 
-The `attentive_eraser_pipeline.cpp` sample uses the same `InpaintingPipeline` interface with `InpaintingMode::ATTENTIVE_ERASER`. It accepts ordinary 512x512 SD1.5 and SD2 models or an ordinary 1024x1024 SDXL Base model; the pipeline injects the AAS graph transformation before compiling the UNet. Pre-converting the UNet with Python or Torch is not required.
+The `attentive_eraser_pipeline.cpp` sample uses the same `InpaintingPipeline` interface with `InpaintingMode::ATTENTIVE_ERASER`. It accepts ordinary SD1.5, SD2, and SDXL Base models and injects the AAS graph transformation before compiling the UNet. Pre-converted Attentive Eraser UNets are not supported.
 
 The UNet graph contract distinguishes SD1.5 (cross-attention width 768), SD2 (width 1024), and SDXL Base (width 2048 with `text_embeds` and `time_ids`). SD1.5 and SD2 both use 16 self-attention layers, the default AAS range `[7,16)`, and a 7-pixel mask blur kernel.
 
@@ -260,7 +260,7 @@ The matching Python sample is [`attentive_eraser_pipeline.py`](../../python/imag
 Run it with a supported model, source image, and mask:
 
 ```sh
-./attentive_eraser_pipeline <MODEL_DIR> <IMAGE> <MASK_IMAGE> [DEVICE] [SEED] [STEPS]
+./attentive_eraser_pipeline <MODEL_DIR> <IMAGE> <MASK_IMAGE> [DEVICE] [SEED] [STEPS] [HEIGHT] [WIDTH]
 ```
 
 For example:
@@ -269,9 +269,9 @@ For example:
 ./attentive_eraser_pipeline ./stable-diffusion-v1-5-ov source_image.png mask.png GPU 123
 ```
 
-The positive prompt is intentionally empty for object removal. The sample keeps `strength`, removal guidance scale, self-attention suppression steps, and inference steps visible in the generation config so they can be edited without expanding the CLI. It uses `strength = 0.8`, which executes 40 of the configured 50 denoising steps.
+The positive prompt is intentionally empty for object removal. When `HEIGHT` or `WIDTH` is omitted, that dimension uses the model default. Explicit dimensions must be positive multiples of 8. A single compiled CPU or GPU pipeline with dynamic spatial inputs can process sequential calls with different square or rectangular dimensions; static model IRs remain restricted to their compiled dimensions. Attentive Eraser supports one output image per prompt.
 
-The pipeline resizes mismatched image or mask inputs to the model size. Gaussian blur, mask binarization, latent-mask max pooling, and AAS runtime input updates remain internal pipeline operations. The generated image is saved as `object_removed_image.bmp`.
+The pipeline resizes the source image and mask independently to the requested output dimensions. Gaussian blur, mask binarization, latent-mask max pooling, and AAS runtime input updates remain internal pipeline operations. The generated image is saved as `object_removed_image.bmp`.
 
 ## Benchmarking sample for image generation pipelines
 

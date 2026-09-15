@@ -264,21 +264,21 @@ Note, that LoRA, heterogeneous execution and other features of `Text2ImagePipeli
 
 ## Run Attentive Eraser through the inpainting pipeline
 
-The `attentive_eraser_pipeline.py` sample enables `InpaintingMode.ATTENTIVE_ERASER` when constructing `InpaintingPipeline`. The same sample supports attentive SD1.5, SD2, and SDXL model directories.
+The `attentive_eraser_pipeline.py` sample enables `InpaintingMode.ATTENTIVE_ERASER` when constructing `InpaintingPipeline`. It supports ordinary SD1.5, SD2, and SDXL Base model directories; pre-converted Attentive Eraser UNets are not supported.
 
 ```sh
-python attentive_eraser_pipeline.py <MODEL_DIR> <IMAGE> <MASK_IMAGE> [DEVICE] [SEED]
+python attentive_eraser_pipeline.py <MODEL_DIR> <IMAGE> <MASK_IMAGE> [DEVICE] [SEED] [--height HEIGHT] [--width WIDTH]
 ```
 
 For example:
 
 ```sh
-python attentive_eraser_pipeline.py ./sd15_atten_eraser_ov source_image.png mask.png GPU 123
+python attentive_eraser_pipeline.py ./stable-diffusion-v1-5-ov source_image.png mask.png GPU 123 --height 512 --width 768
 ```
 
-The positive prompt is intentionally empty for object removal. The sample keeps `strength`, removal guidance scale, self-attention suppression steps, and inference steps visible in the generation config so they can be edited without expanding the CLI. It uses `strength = 0.8`, which executes 40 of the configured 50 denoising steps.
+The positive prompt is intentionally empty for object removal. When `--height` or `--width` is omitted, that dimension uses the model default. Explicit dimensions must be positive multiples of 8. A single compiled CPU or GPU pipeline with dynamic spatial inputs can process sequential calls with different square or rectangular dimensions; static model IRs remain restricted to their compiled dimensions. Attentive Eraser supports one output image per prompt.
 
-The pipeline resizes mismatched image or mask inputs to the model's fixed dimensions: 512x512 for SD1.5/SD2 and 1024x1024 for SDXL. Gaussian blur, mask binarization, and latent-mask max pooling remain internal pipeline operations. The generated image is saved as `object_removed_image.bmp`.
+The pipeline resizes the source image and mask independently to the requested output dimensions. Gaussian blur, mask binarization, and latent-mask max pooling remain internal pipeline operations. The generated image is saved as `object_removed_image.bmp`.
 
 ## benchmarking sample for image generation pipelines
 

@@ -11,17 +11,17 @@
 #include "progress_bar.hpp"
 
 int32_t main(int32_t argc, char* argv[]) try {
-    OPENVINO_ASSERT(argc >= 4 && argc <= 7,
+    OPENVINO_ASSERT(argc >= 4 && argc <= 9,
                     "Usage: ",
                     argv[0],
-                    " <MODEL_DIR> <IMAGE> <MASK_IMAGE> [DEVICE] [SEED] [STEPS]");
+                    " <MODEL_DIR> <IMAGE> <MASK_IMAGE> [DEVICE] [SEED] [STEPS] [HEIGHT] [WIDTH]");
 
     const std::string models_path = argv[1];
     const std::string image_path = argv[2];
     const std::string mask_image_path = argv[3];
     const std::string device = argc >= 5 ? argv[4] : "CPU";
     const size_t seed = argc >= 6 ? std::stoull(argv[5]) : 123;
-    const size_t num_inference_steps = argc == 7 ? std::stoull(argv[6]) : 50;
+    const size_t num_inference_steps = argc >= 7 ? std::stoull(argv[6]) : 50;
 
     ov::AnyMap properties{
         ov::genai::inpainting_mode(ov::genai::InpaintingMode::ATTENTIVE_ERASER),
@@ -38,6 +38,12 @@ int32_t main(int32_t argc, char* argv[]) try {
     config.strength = 0.8f;
     config.num_inference_steps = num_inference_steps;
     config.rng_seed = seed;
+    if (argc >= 8) {
+        config.height = std::stoll(argv[7]);
+    }
+    if (argc >= 9) {
+        config.width = std::stoll(argv[8]);
+    }
     config.attentive_eraser->rm_guidance_scale = 9.0f;
     config.attentive_eraser->ss_steps = 9;
     pipeline.set_generation_config(config);
