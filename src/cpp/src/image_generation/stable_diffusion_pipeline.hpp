@@ -431,13 +431,15 @@ public:
                 const size_t kernel_size = configured_kernel == 0
                     ? attentive_eraser_mask_blur_kernel()
                     : configured_kernel;
-                ov::Tensor full_resolution_mask = process_attentive_mask(resized_mask, kernel_size);
+                AttentiveEraserMaskOutputs masks = process_attentive_mask(
+                    resized_mask, kernel_size, vae_scale_factor);
+                ov::Tensor full_resolution_mask = masks.full_resolution;
                 const float* mask_data = full_resolution_mask.data<const float>();
                 OPENVINO_ASSERT(std::any_of(mask_data,
                                             mask_data + full_resolution_mask.get_size(),
                                             [](float value) { return value == 0.0f; }),
                                 "Attentive eraser mask must contain at least one unmasked pixel");
-                latent_mask = max_pool_mask(full_resolution_mask, vae_scale_factor);
+                latent_mask = masks.pooled;
                 m_unet->set_hidden_states("aas_mask", full_resolution_mask);
                 // start from noised image latent instead of pure noise
                 image_latent.copy_to(latent);
@@ -653,24 +655,28 @@ protected:
         return 7;
     }
 
-    ov::Tensor process_attentive_mask(ov::Tensor mask, size_t kernel_size) {
+    AttentiveEraserMaskOutputs process_attentive_mask(ov::Tensor mask,
+                                                      size_t kernel_size,
+                                                      size_t pooling_factor) {
         const ov::Shape& shape = mask.get_shape();
         OPENVINO_ASSERT(mask.get_element_type() == ov::element::u8, "Mask must have u8 element type");
         OPENVINO_ASSERT(shape.size() == 4 && shape[0] == 1, "Mask must be rank-4 NHWC with batch 1");
         OPENVINO_ASSERT(shape[3] == 1 || shape[3] == 3, "Mask must have 1 or 3 channels");
 
-        if (!m_attentive_mask_blur_kernel || *m_attentive_mask_blur_kernel != kernel_size) {
+        if (!m_attentive_mask_blur_kernel || *m_attentive_mask_blur_kernel != kernel_size ||
+            !m_attentive_mask_pooling_factor || *m_attentive_mask_pooling_factor != pooling_factor) {
             m_attentive_mask_processor_rgb = std::make_shared<AttentiveEraserMaskProcessor>(
-                "CPU", kernel_size, 0.1f, false);
+                "CPU", kernel_size, 0.1f, false, pooling_factor);
             m_attentive_mask_processor_gray = std::make_shared<AttentiveEraserMaskProcessor>(
-                "CPU", kernel_size, 0.1f, true);
+                "CPU", kernel_size, 0.1f, true, pooling_factor);
             m_attentive_mask_blur_kernel = kernel_size;
+            m_attentive_mask_pooling_factor = pooling_factor;
         }
 
-        std::shared_ptr<IImageProcessor> processor = shape[3] == 1
+        std::shared_ptr<AttentiveEraserMaskProcessor> processor = shape[3] == 1
             ? m_attentive_mask_processor_gray
             : m_attentive_mask_processor_rgb;
-        return processor->execute(std::move(mask));
+        return processor->execute_with_pooling(std::move(mask));
     }
 
     virtual std::vector<size_t> attentive_eraser_aas_layers() const {
@@ -787,9 +793,10 @@ protected:
 
     // Attentive eraser support
     bool m_use_attentive_eraser = false;
-    std::shared_ptr<IImageProcessor> m_attentive_mask_processor_rgb = nullptr;
-    std::shared_ptr<IImageProcessor> m_attentive_mask_processor_gray = nullptr;
+    std::shared_ptr<AttentiveEraserMaskProcessor> m_attentive_mask_processor_rgb = nullptr;
+    std::shared_ptr<AttentiveEraserMaskProcessor> m_attentive_mask_processor_gray = nullptr;
     std::optional<size_t> m_attentive_mask_blur_kernel;
+    std::optional<size_t> m_attentive_mask_pooling_factor;
     bool m_aas_runtime_scalars_bound = false;
     ov::Tensor m_aas_active_tensor;
     ov::Tensor m_ss_active_tensor;
