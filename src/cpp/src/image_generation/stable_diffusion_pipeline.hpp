@@ -14,7 +14,6 @@
 #include "image_generation/threaded_callback.hpp"
 
 #include "openvino/genai/image_generation/attentive_eraser_aas.hpp"
-#include "openvino/genai/image_generation/attentive_eraser_utils.hpp"
 #include "openvino/genai/image_generation/clip_text_model.hpp"
 #include "openvino/genai/image_generation/clip_text_model_with_projection.hpp"
 #include "openvino/genai/image_generation/unet2d_condition_model.hpp"
@@ -595,6 +594,18 @@ public:
     }
 
 protected:
+    static bool is_attentive_eraser_aas_active(size_t inference_step,
+                                               size_t start_step,
+                                               float strength,
+                                               size_t num_inference_steps) {
+        const size_t end_step = static_cast<size_t>(strength * num_inference_steps);
+        return inference_step >= start_step && inference_step < end_step;
+    }
+
+    static bool is_attentive_eraser_ss_active(size_t inference_step, size_t ss_steps) {
+        return inference_step <= ss_steps;
+    }
+
     static void apply_attentive_removal_guidance(const ov::Tensor& noise_pair,
                                                  float scale,
                                                  ov::Tensor result) {

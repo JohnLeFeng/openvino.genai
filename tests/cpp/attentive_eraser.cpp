@@ -1,7 +1,6 @@
 // Copyright (C) 2023-2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-#include "openvino/genai/image_generation/attentive_eraser_utils.hpp"
 #include "openvino/genai/image_generation/inpainting_pipeline.hpp"
 #include "openvino/genai/image_generation/attentive_eraser_mask_processor.hpp"
 #include "image_generation/stable_diffusion_pipeline.hpp"
@@ -30,6 +29,8 @@ public:
     using StableDiffusionPipeline::apply_attentive_removal_guidance;
     using StableDiffusionPipeline::blend_attentive_latents;
     using StableDiffusionPipeline::extract_attentive_eraser_aas_layers;
+    using StableDiffusionPipeline::is_attentive_eraser_aas_active;
+    using StableDiffusionPipeline::is_attentive_eraser_ss_active;
     using StableDiffusionPipeline::process_attentive_mask;
 
     bool uses_ddim_scheduler() const {
@@ -355,12 +356,12 @@ TEST(AttentiveEraserConfigTest, ValidatesRuntimeAasControls) {
 }
 
 TEST(AttentiveEraserConfigTest, UsesConfiguredAasStepBoundaries) {
-    EXPECT_FALSE(ov::genai::is_attentive_eraser_aas_active(3, 4, 0.8f, 50));
-    EXPECT_TRUE(ov::genai::is_attentive_eraser_aas_active(4, 4, 0.8f, 50));
-    EXPECT_TRUE(ov::genai::is_attentive_eraser_aas_active(39, 4, 0.8f, 50));
-    EXPECT_FALSE(ov::genai::is_attentive_eraser_aas_active(40, 4, 0.8f, 50));
-    EXPECT_TRUE(ov::genai::is_attentive_eraser_ss_active(9, 9));
-    EXPECT_FALSE(ov::genai::is_attentive_eraser_ss_active(10, 9));
+    EXPECT_FALSE(AttentiveEraserPipelineTestAccessor::is_attentive_eraser_aas_active(3, 4, 0.8f, 50));
+    EXPECT_TRUE(AttentiveEraserPipelineTestAccessor::is_attentive_eraser_aas_active(4, 4, 0.8f, 50));
+    EXPECT_TRUE(AttentiveEraserPipelineTestAccessor::is_attentive_eraser_aas_active(39, 4, 0.8f, 50));
+    EXPECT_FALSE(AttentiveEraserPipelineTestAccessor::is_attentive_eraser_aas_active(40, 4, 0.8f, 50));
+    EXPECT_TRUE(AttentiveEraserPipelineTestAccessor::is_attentive_eraser_ss_active(9, 9));
+    EXPECT_FALSE(AttentiveEraserPipelineTestAccessor::is_attentive_eraser_ss_active(10, 9));
 }
 
 TEST(AttentiveEraserModelTest, GeneratesSequentialDynamicSizesWithOnePipeline) {
