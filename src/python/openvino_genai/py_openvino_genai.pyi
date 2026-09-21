@@ -2465,6 +2465,13 @@ class InpaintingPipeline:
                     models_path (os.PathLike): Path to the folder with exported model files.
         """
     @typing.overload
+    def __init__(self, models_path: os.PathLike | str | bytes, inpainting_mode: InpaintingMode) -> None:
+        """
+                    Creates an uncompiled InpaintingPipeline for the selected mode.
+                    models_path (os.PathLike): Path to the folder with exported model files.
+                    inpainting_mode (InpaintingMode): Inpainting pipeline mode.
+        """
+    @typing.overload
     def __init__(self, models_path: os.PathLike | str | bytes, device: str, **kwargs) -> None:
         """
                     InpaintingPipeline class constructor.

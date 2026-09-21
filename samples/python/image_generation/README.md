@@ -267,16 +267,22 @@ Note, that LoRA, heterogeneous execution and other features of `Text2ImagePipeli
 The `attentive_eraser_pipeline.py` sample enables `InpaintingMode.ATTENTIVE_ERASER` when constructing `InpaintingPipeline`. It supports ordinary SD1.5, SD2, and SDXL Base model directories; pre-converted Attentive Eraser UNets are not supported.
 
 ```sh
-python attentive_eraser_pipeline.py <MODEL_DIR> <IMAGE> <MASK_IMAGE> [DEVICE] [SEED] [--height HEIGHT] [--width WIDTH]
+python attentive_eraser_pipeline.py <MODEL_DIR> <IMAGE> <MASK_IMAGE> [DEVICE] [SEED] [--height HEIGHT] [--width WIDTH] [--pipeline-shape {dynamic,static}]
 ```
 
-For example:
+Dynamic shape is the default:
 
 ```sh
 python attentive_eraser_pipeline.py ./stable-diffusion-v1-5-ov source_image.png mask.png GPU 123 --height 512 --width 768
 ```
 
-The positive prompt is intentionally empty for object removal. When `--height` or `--width` is omitted, that dimension uses the model default. Explicit dimensions must be positive multiples of 8. A single compiled CPU or GPU pipeline with dynamic spatial inputs can process sequential calls with different square or rectangular dimensions; static model IRs remain restricted to their compiled dimensions. Attentive Eraser supports one output image per prompt.
+To reshape all pipeline components before compilation, select static shape and provide both dimensions:
+
+```sh
+python attentive_eraser_pipeline.py ./stable-diffusion-v1-5-ov source_image.png mask.png GPU 123 --height 512 --width 768 --pipeline-shape static
+```
+
+The positive prompt is intentionally empty for object removal. Dynamic mode allows either dimension to use the model default when omitted. Static mode requires both `--height` and `--width`. Explicit dimensions must be positive multiples of 8. Attentive Eraser supports one output image per prompt.
 
 The pipeline resizes the source image and mask independently to the requested output dimensions. Gaussian blur, mask binarization, and latent-mask max pooling remain internal pipeline operations. The generated image is saved as `object_removed_image.bmp`.
 

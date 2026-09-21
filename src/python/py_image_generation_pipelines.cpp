@@ -670,6 +670,20 @@ void init_image_generation_pipelines(py::module_& m) {
         )")
         .def(py::init([](
             const std::filesystem::path& models_path,
+            ov::genai::InpaintingMode mode
+        ) {
+            ScopedVar env_manager(pyutils::ov_tokenizers_module_path());
+            return std::make_unique<ov::genai::InpaintingPipeline>(models_path, mode);
+        }),
+        py::arg("models_path"), "folder with exported model files.",
+        py::arg("inpainting_mode"), "inpainting pipeline mode",
+        R"(
+            Creates an uncompiled InpaintingPipeline for the selected mode.
+            models_path (os.PathLike): Path to the folder with exported model files.
+            inpainting_mode (InpaintingMode): Inpainting pipeline mode.
+        )")
+        .def(py::init([](
+            const std::filesystem::path& models_path,
             const std::string& device,
             const py::kwargs& kwargs
         ) {

@@ -255,8 +255,6 @@ The `attentive_eraser_pipeline.cpp` sample uses the same `InpaintingPipeline` in
 
 The UNet graph contract distinguishes SD1.5 (cross-attention width 768), SD2 (width 1024), and SDXL Base (width 2048 with `text_embeds` and `time_ids`). SD1.5 and SD2 both use 16 self-attention layers, the default AAS range `[7,16)`, and a 7-pixel mask blur kernel.
 
-The matching Python sample is [`attentive_eraser_pipeline.py`](../../python/image_generation/attentive_eraser_pipeline.py) and uses the same arguments and defaults.
-
 Run it with a supported model, source image, and mask:
 
 ```sh

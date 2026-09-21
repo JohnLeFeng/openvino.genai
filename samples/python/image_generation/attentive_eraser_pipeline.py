@@ -24,12 +24,18 @@ def main():
     parser.add_argument("seed", metavar="SEED", nargs="?", type=int, default=123)
     parser.add_argument("--height", type=int, default=None)
     parser.add_argument("--width", type=int, default=None)
+    parser.add_argument(
+        "--pipeline-shape",
+        choices=("dynamic", "static"),
+        default="dynamic",
+    )
     args = parser.parse_args()
+    if args.pipeline_shape == "static" and (args.height is None or args.width is None):
+        parser.error("static pipeline shape requires --height and --width")
 
     pipeline = openvino_genai.InpaintingPipeline(
         args.model_dir,
-        args.device,
-        inpainting_mode=openvino_genai.InpaintingMode.ATTENTIVE_ERASER,
+        openvino_genai.InpaintingMode.ATTENTIVE_ERASER,
     )
 
     attentive_eraser = openvino_genai.AttentiveEraserConfig()
@@ -49,6 +55,9 @@ def main():
     if args.width is not None:
         config.width = args.width
     pipeline.set_generation_config(config)
+    if args.pipeline_shape == "static":
+        pipeline.reshape(1, config.height, config.width, config.guidance_scale)
+    pipeline.compile(args.device)
 
     def callback(step, num_steps, latent):
         print(f"Generation step {step + 1} / {num_steps}")
