@@ -10,7 +10,7 @@
 #include <filesystem>
 
 #include "image_generation/diffusion_pipeline.hpp"
-#include "image_generation/attentive_eraser_mask_processor.hpp"
+#include "openvino/genai/image_generation/attentive_eraser_mask_processor.hpp"
 #include "image_generation/threaded_callback.hpp"
 
 #include "openvino/genai/image_generation/attentive_eraser_aas.hpp"

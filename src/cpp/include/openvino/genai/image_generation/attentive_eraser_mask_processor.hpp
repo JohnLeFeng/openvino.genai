@@ -3,7 +3,13 @@
 
 #pragma once
 
-#include "image_generation/image_processor.hpp"
+#include <cstddef>
+#include <memory>
+#include <string>
+
+#include "openvino/core/model.hpp"
+#include "openvino/runtime/infer_request.hpp"
+#include "openvino/runtime/tensor.hpp"
 
 namespace ov {
 namespace genai {
@@ -13,7 +19,7 @@ struct AttentiveEraserMaskOutputs {
     ov::Tensor pooled;
 };
 
-class AttentiveEraserMaskProcessor : public IImageProcessor {
+class AttentiveEraserMaskProcessor {
 public:
     AttentiveEraserMaskProcessor(const std::string& device,
                                  size_t kernel_size,
@@ -21,12 +27,14 @@ public:
                                  bool gray_scale_source,
                                  size_t pooling_factor = 1);
 
-    ov::Tensor execute(ov::Tensor mask) override;
+    ov::Tensor execute(ov::Tensor mask);
     AttentiveEraserMaskOutputs execute_with_pooling(ov::Tensor mask);
 
 private:
+    void compile(std::shared_ptr<ov::Model> model, const std::string& device);
     void validate(const ov::Tensor& mask) const;
 
+    ov::InferRequest m_request;
     size_t m_padding_radius;
     size_t m_pooling_factor;
     bool m_gray_scale_source;

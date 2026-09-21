@@ -3,7 +3,7 @@
 
 #include "openvino/genai/image_generation/attentive_eraser_utils.hpp"
 #include "openvino/genai/image_generation/inpainting_pipeline.hpp"
-#include "image_generation/attentive_eraser_mask_processor.hpp"
+#include "openvino/genai/image_generation/attentive_eraser_mask_processor.hpp"
 #include "image_generation/stable_diffusion_pipeline.hpp"
 
 #include <gtest/gtest.h>

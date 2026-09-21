@@ -1,7 +1,7 @@
 // Copyright (C) 2023-2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-#include "image_generation/attentive_eraser_mask_processor.hpp"
+#include "openvino/genai/image_generation/attentive_eraser_mask_processor.hpp"
 
 #include <cmath>
 #include <numeric>
@@ -17,6 +17,8 @@
 #include "openvino/op/parameter.hpp"
 #include "openvino/op/result.hpp"
 #include "openvino/op/select.hpp"
+
+#include "utils.hpp"
 
 namespace ov {
 namespace genai {
@@ -106,7 +108,6 @@ AttentiveEraserMaskProcessor::AttentiveEraserMaskProcessor(const std::string& de
                                                            float threshold,
                                                            bool gray_scale_source,
                                                            size_t pooling_factor) :
-    IImageProcessor(device),
     m_padding_radius(kernel_size / 2),
     m_pooling_factor(pooling_factor),
     m_gray_scale_source(gray_scale_source) {
@@ -114,7 +115,11 @@ AttentiveEraserMaskProcessor::AttentiveEraserMaskProcessor(const std::string& de
                     "Gaussian kernel size must be positive and odd");
     OPENVINO_ASSERT(threshold >= 0.0f && threshold <= 1.0f, "Mask threshold must be in [0, 1]");
     OPENVINO_ASSERT(pooling_factor > 0, "Mask pooling factor must be positive");
-    compile(create_attentive_mask_model(kernel_size, threshold, gray_scale_source, pooling_factor));
+    compile(create_attentive_mask_model(kernel_size, threshold, gray_scale_source, pooling_factor), device);
+}
+
+void AttentiveEraserMaskProcessor::compile(std::shared_ptr<ov::Model> model, const std::string& device) {
+    m_request = utils::singleton_core().compile_model(model, device).create_infer_request();
 }
 
 void AttentiveEraserMaskProcessor::validate(const ov::Tensor& mask) const {
