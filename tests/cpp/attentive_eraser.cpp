@@ -1,8 +1,8 @@
 // Copyright (C) 2023-2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-#include "openvino/genai/image_generation/attentive_eraser_utils.hpp"
 #include "openvino/genai/image_generation/inpainting_pipeline.hpp"
+#include "openvino/genai/image_generation/attentive_eraser_mask_processor.hpp"
 #include "image_generation/stable_diffusion_pipeline.hpp"
 
 #include <gtest/gtest.h>
@@ -29,6 +29,9 @@ public:
     using StableDiffusionPipeline::apply_attentive_removal_guidance;
     using StableDiffusionPipeline::blend_attentive_latents;
     using StableDiffusionPipeline::extract_attentive_eraser_aas_layers;
+    using StableDiffusionPipeline::is_attentive_eraser_aas_active;
+    using StableDiffusionPipeline::is_attentive_eraser_ss_active;
+    using StableDiffusionPipeline::process_attentive_mask;
 
     bool uses_ddim_scheduler() const {
         return std::dynamic_pointer_cast<ov::genai::DDIMScheduler>(m_scheduler) != nullptr;
@@ -47,11 +50,117 @@ TEST(AttentiveEraserTensorTest, ConvertsRgbMaskToGrayBeforeBinarizing) {
     const std::array<uint8_t, 12> pixels{255, 255, 255, 0, 0, 0, 255, 255, 255, 0, 0, 0};
     ov::Tensor mask(ov::element::u8, {1, 2, 2, 3}, const_cast<uint8_t*>(pixels.data()));
 
-    ov::Tensor processed = ov::genai::preprocess_attentive_mask(mask, 1, 0.1f);
+    ov::genai::AttentiveEraserMaskProcessor processor("CPU", 1, 0.1f, false);
+    ov::Tensor processed = processor.execute(mask);
 
     ASSERT_EQ(processed.get_shape(), ov::Shape({1, 1, 2, 2}));
     EXPECT_FLOAT_EQ(processed.data<const float>()[0], 1.0f);
     EXPECT_FLOAT_EQ(processed.data<const float>()[1], 0.0f);
+}
+
+TEST(AttentiveEraserTensorTest, ProducesFullResolutionAndPooledMasksInOneInference) {
+    const std::array<uint8_t, 16> pixels{
+        0, 255, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 255, 0,
+    };
+    ov::Tensor mask(ov::element::u8, {1, 4, 4, 1}, const_cast<uint8_t*>(pixels.data()));
+    ov::genai::AttentiveEraserMaskProcessor processor("CPU", 1, 0.1f, true, 2);
+
+    const auto [full_resolution, pooled] = processor.execute_with_pooling(mask);
+
+    EXPECT_EQ(full_resolution.get_shape(), ov::Shape({1, 1, 4, 4}));
+    ASSERT_EQ(pooled.get_shape(), ov::Shape({1, 1, 2, 2}));
+    const std::array<float, 4> expected{1.0f, 0.0f, 0.0f, 1.0f};
+    for (size_t index = 0; index < expected.size(); ++index) {
+        EXPECT_FLOAT_EQ(pooled.data<const float>()[index], expected[index]);
+    }
+}
+
+TEST(AttentiveEraserTensorTest, RejectsMaskDimensionsNotDivisibleByPoolingFactor) {
+    std::array<uint8_t, 15> pixels{};
+    ov::Tensor mask(ov::element::u8, {1, 3, 5, 1}, pixels.data());
+    ov::genai::AttentiveEraserMaskProcessor processor("CPU", 1, 0.1f, true, 2);
+
+    EXPECT_THROW(processor.execute_with_pooling(mask), ov::Exception);
+}
+
+TEST(AttentiveEraserTensorTest, OpenVinoMaskProcessorMatchesReference) {
+    std::array<uint8_t, 9 * 9 * 3> pixels{};
+    for (size_t y = 2; y < 6; ++y) {
+        for (size_t x = 3; x < 7; ++x) {
+            const size_t offset = (y * 9 + x) * 3;
+            pixels[offset] = 255;
+            pixels[offset + 1] = 255;
+            pixels[offset + 2] = 255;
+        }
+    }
+    const std::array<float, 9 * 9> torchvision_expected{
+        0, 0, 0, 1, 1, 1, 1, 1, 0,
+        0, 0, 1, 1, 1, 1, 1, 1, 1,
+        0, 0, 1, 1, 1, 1, 1, 1, 1,
+        0, 1, 1, 1, 1, 1, 1, 1, 1,
+        0, 1, 1, 1, 1, 1, 1, 1, 1,
+        0, 0, 1, 1, 1, 1, 1, 1, 1,
+        0, 0, 1, 1, 1, 1, 1, 1, 0,
+        0, 0, 0, 0, 1, 1, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0,
+    };
+    ov::Tensor mask(ov::element::u8, {1, 9, 9, 3}, pixels.data());
+    ov::genai::AttentiveEraserMaskProcessor processor("CPU", 7, 0.1f, false);
+    ov::Tensor processed = processor.execute(mask);
+
+    ASSERT_EQ(processed.get_shape(), ov::Shape({1, 1, 9, 9}));
+    for (size_t index = 0; index < processed.get_size(); ++index) {
+        EXPECT_FLOAT_EQ(processed.data<const float>()[index], torchvision_expected[index]);
+    }
+}
+
+TEST(AttentiveEraserTensorTest, OpenVinoMaskProcessorMatchesReferenceForSdxlKernelAndGrayMask) {
+    std::array<uint8_t, 79 * 81> pixels{};
+    for (size_t y = 25; y < 54; ++y) {
+        for (size_t x = 26; x < 55; ++x) {
+            pixels[y * 81 + x] = 255;
+        }
+    }
+    ov::Tensor mask(ov::element::u8, {1, 79, 81, 1}, pixels.data());
+    ov::genai::AttentiveEraserMaskProcessor processor("CPU", 77, 0.1f, true);
+    ov::Tensor processed = processor.execute(mask);
+
+    ASSERT_EQ(processed.get_shape(), ov::Shape({1, 1, 79, 81}));
+    for (size_t index = 0; index < processed.get_size(); ++index) {
+        EXPECT_TRUE(processed.data<const float>()[index] == 0.0f ||
+                    processed.data<const float>()[index] == 1.0f);
+    }
+}
+
+TEST(AttentiveEraserTensorTest, OpenVinoMaskProcessorRejectsInvalidReflectionPadding) {
+    std::array<uint8_t, 3 * 5> pixels{};
+    ov::Tensor mask(ov::element::u8, {1, 3, 5, 1}, pixels.data());
+
+    ov::genai::AttentiveEraserMaskProcessor processor("CPU", 7, 0.1f, true);
+
+    EXPECT_THROW(processor.execute(mask), ov::Exception);
+}
+
+TEST(AttentiveEraserTensorTest, PipelineRebuildsMaskProcessorWhenKernelChanges) {
+    std::array<uint8_t, 7 * 7> pixels{};
+    pixels[3 * 7 + 3] = 255;
+    ov::Tensor mask(ov::element::u8, {1, 7, 7, 1}, pixels.data());
+    AttentiveEraserPipelineTestAccessor pipeline(true);
+
+    ov::Tensor kernel_one = pipeline.process_attentive_mask(mask, 1, 1).full_resolution;
+    ov::Tensor kernel_three = pipeline.process_attentive_mask(mask, 3, 1).full_resolution;
+    ov::genai::AttentiveEraserMaskProcessor processor_one("CPU", 1, 0.1f, true);
+    ov::genai::AttentiveEraserMaskProcessor processor_three("CPU", 3, 0.1f, true);
+    ov::Tensor reference_one = processor_one.execute(mask);
+    ov::Tensor reference_three = processor_three.execute(mask);
+
+    for (size_t index = 0; index < mask.get_size(); ++index) {
+        EXPECT_FLOAT_EQ(kernel_one.data<const float>()[index], reference_one.data<const float>()[index]);
+        EXPECT_FLOAT_EQ(kernel_three.data<const float>()[index], reference_three.data<const float>()[index]);
+    }
 }
 
 TEST(AttentiveEraserTensorTest, AppliesRemovalGuidance) {
@@ -247,12 +356,12 @@ TEST(AttentiveEraserConfigTest, ValidatesRuntimeAasControls) {
 }
 
 TEST(AttentiveEraserConfigTest, UsesConfiguredAasStepBoundaries) {
-    EXPECT_FALSE(ov::genai::is_attentive_eraser_aas_active(3, 4, 0.8f, 50));
-    EXPECT_TRUE(ov::genai::is_attentive_eraser_aas_active(4, 4, 0.8f, 50));
-    EXPECT_TRUE(ov::genai::is_attentive_eraser_aas_active(39, 4, 0.8f, 50));
-    EXPECT_FALSE(ov::genai::is_attentive_eraser_aas_active(40, 4, 0.8f, 50));
-    EXPECT_TRUE(ov::genai::is_attentive_eraser_ss_active(9, 9));
-    EXPECT_FALSE(ov::genai::is_attentive_eraser_ss_active(10, 9));
+    EXPECT_FALSE(AttentiveEraserPipelineTestAccessor::is_attentive_eraser_aas_active(3, 4, 0.8f, 50));
+    EXPECT_TRUE(AttentiveEraserPipelineTestAccessor::is_attentive_eraser_aas_active(4, 4, 0.8f, 50));
+    EXPECT_TRUE(AttentiveEraserPipelineTestAccessor::is_attentive_eraser_aas_active(39, 4, 0.8f, 50));
+    EXPECT_FALSE(AttentiveEraserPipelineTestAccessor::is_attentive_eraser_aas_active(40, 4, 0.8f, 50));
+    EXPECT_TRUE(AttentiveEraserPipelineTestAccessor::is_attentive_eraser_ss_active(9, 9));
+    EXPECT_FALSE(AttentiveEraserPipelineTestAccessor::is_attentive_eraser_ss_active(10, 9));
 }
 
 TEST(AttentiveEraserModelTest, GeneratesSequentialDynamicSizesWithOnePipeline) {

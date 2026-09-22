@@ -44,7 +44,8 @@ static constexpr ov::Property<InpaintingMode> inpainting_mode{"inpainting_mode"}
 
 class OPENVINO_GENAI_EXPORTS InpaintingPipeline {
 public:
-    explicit InpaintingPipeline(const std::filesystem::path& models_path);
+    explicit InpaintingPipeline(const std::filesystem::path& models_path,
+                                InpaintingMode mode = InpaintingMode::STANDARD);
 
     InpaintingPipeline(const std::filesystem::path& models_path, const std::string& device, const ov::AnyMap& properties = {});
 
