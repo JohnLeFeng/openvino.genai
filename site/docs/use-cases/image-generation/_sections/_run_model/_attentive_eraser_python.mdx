@@ -17,14 +17,14 @@ mask_image = read_image("mask.png")
 
 pipeline = ov_genai.InpaintingPipeline(
     model_path,
-    ov_genai.InpaintingMode.ATTENTIVE_ERASER,
+    "${props.device || 'CPU'}",
+    inpainting_mode=ov_genai.InpaintingMode.ATTENTIVE_ERASER,
 )
 config = pipeline.get_generation_config()
 config.guidance_scale = 1.0
 config.attentive_eraser.rm_guidance_scale = 9.0
 # prompt_2 is SDXL-only and must remain unset or empty in Attentive Eraser mode.
 pipeline.set_generation_config(config)
-pipeline.compile("${props.device || 'CPU'}")
 
 generated = pipeline.generate("", source_image, mask_image)
 Image.fromarray(generated.data[0]).save("object_removed_image.bmp")
