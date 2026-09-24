@@ -369,7 +369,11 @@ void init_image_generation_pipelines(py::module_& m) {
         .value("STANDARD", ov::genai::InpaintingMode::STANDARD)
         .value("ATTENTIVE_ERASER", ov::genai::InpaintingMode::ATTENTIVE_ERASER);
 
-    py::class_<ov::genai::AttentiveEraserConfig>(m, "AttentiveEraserConfig", "Runtime controls for SD1.5 Attentive Eraser generation.")
+    py::class_<ov::genai::AttentiveEraserConfig>(
+        m,
+        "AttentiveEraserConfig",
+        "Runtime controls for prompt-free SD1.5, SD2, and SDXL Attentive Eraser object removal. "
+        "The primary prompt must be empty. SDXL prompt_2 must be unset or empty; guidance_scale must be 1.0.")
         .def(py::init<>())
         .def_readwrite("rm_guidance_scale", &ov::genai::AttentiveEraserConfig::rm_guidance_scale, "Removal guidance scale; must be positive.")
         .def_readwrite("ss_steps", &ov::genai::AttentiveEraserConfig::ss_steps, "Last denoising step that applies softmax scaling, inclusive.")

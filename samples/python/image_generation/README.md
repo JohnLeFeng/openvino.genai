@@ -282,7 +282,7 @@ To reshape all pipeline components before compilation, select static shape and p
 python attentive_eraser_pipeline.py ./stable-diffusion-v1-5-ov source_image.png mask.png GPU 123 --height 512 --width 768 --pipeline-shape static
 ```
 
-The positive prompt is intentionally empty for object removal. Dynamic mode allows either dimension to use the model default when omitted. Static mode requires both `--height` and `--width`. Explicit dimensions must be positive multiples of 8. Attentive Eraser supports one output image per prompt.
+Attentive Eraser is a prompt-free object-removal workflow. The primary prompt must be empty. `prompt_2` is used only by SDXL's second text encoder and must also be unset or empty. Negative prompts are unsupported, and `guidance_scale` must be `1.0`. Use `rm_guidance_scale` in `AttentiveEraserConfig` to tune removal guidance. Dynamic mode allows either dimension to use the model default when omitted. Static mode requires both `--height` and `--width`. Explicit dimensions must be positive multiples of 8. Attentive Eraser supports one output image per generation call.
 
 The pipeline resizes the source image and mask independently to the requested output dimensions. Gaussian blur, mask binarization, and latent-mask max pooling remain internal pipeline operations. The generated image is saved as `object_removed_image.bmp`.
 

@@ -267,7 +267,7 @@ For example:
 ./attentive_eraser_pipeline ./stable-diffusion-v1-5-ov source_image.png mask.png GPU 123
 ```
 
-The positive prompt is intentionally empty for object removal. When `HEIGHT` or `WIDTH` is omitted, that dimension uses the model default. Explicit dimensions must be positive multiples of 8. A single compiled CPU or GPU pipeline with dynamic spatial inputs can process sequential calls with different square or rectangular dimensions; static model IRs remain restricted to their compiled dimensions. Attentive Eraser supports one output image per prompt.
+Attentive Eraser is a prompt-free object-removal workflow. The primary prompt must be empty. `prompt_2` is used only by SDXL's second text encoder and must also be unset or empty. Negative prompts are unsupported, and `guidance_scale` must be `1.0`. Use `rm_guidance_scale` in `AttentiveEraserConfig` to tune removal guidance. When `HEIGHT` or `WIDTH` is omitted, that dimension uses the model default. Explicit dimensions must be positive multiples of 8. A single compiled CPU or GPU pipeline with dynamic spatial inputs can process sequential calls with different square or rectangular dimensions; static model IRs remain restricted to their compiled dimensions. Attentive Eraser supports one output image per generation call.
 
 The pipeline resizes the source image and mask independently to the requested output dimensions. Gaussian blur, mask binarization, latent-mask max pooling, and AAS runtime input updates remain internal pipeline operations. The generated image is saved as `object_removed_image.bmp`.
 

@@ -32,6 +32,7 @@ public:
     using StableDiffusionPipeline::is_attentive_eraser_aas_active;
     using StableDiffusionPipeline::is_attentive_eraser_ss_active;
     using StableDiffusionPipeline::process_attentive_mask;
+    using StableDiffusionPipeline::validate_attentive_eraser_prompts;
 
     bool uses_ddim_scheduler() const {
         return std::dynamic_pointer_cast<ov::genai::DDIMScheduler>(m_scheduler) != nullptr;
@@ -323,6 +324,25 @@ TEST(AttentiveEraserConfigTest, UsesFullDenoisingStrengthForEveryModelFamily) {
     EXPECT_EQ(config.height, 512);
     EXPECT_EQ(config.width, 512);
     EXPECT_TRUE(config.attentive_eraser.has_value());
+}
+
+TEST(AttentiveEraserConfigTest, AcceptsOnlyEmptyPrompts) {
+    ov::genai::ImageGenerationConfig config;
+
+    EXPECT_NO_THROW(AttentiveEraserPipelineTestAccessor::validate_attentive_eraser_prompts("", config));
+
+    config.prompt_2 = "";
+    EXPECT_NO_THROW(AttentiveEraserPipelineTestAccessor::validate_attentive_eraser_prompts("", config));
+}
+
+TEST(AttentiveEraserConfigTest, RejectsTextConditioningPrompts) {
+    ov::genai::ImageGenerationConfig config;
+
+    EXPECT_THROW(AttentiveEraserPipelineTestAccessor::validate_attentive_eraser_prompts("remove object", config),
+                 ov::Exception);
+
+    config.prompt_2 = "remove object";
+    EXPECT_THROW(AttentiveEraserPipelineTestAccessor::validate_attentive_eraser_prompts("", config), ov::Exception);
 }
 
 TEST(AttentiveEraserConfigTest, ValidatesMaskBlurKernelOverride) {

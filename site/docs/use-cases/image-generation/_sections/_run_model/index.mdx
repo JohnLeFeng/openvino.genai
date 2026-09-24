@@ -9,6 +9,8 @@ import Image2ImageJS from './_image2image_js.mdx';
 import InpaintingCPP from './_inpainting_cpp.mdx';
 import InpaintingPython from './_inpainting_python.mdx';
 import InpaintingJS from './_inpainting_js.mdx';
+import AttentiveEraserCPP from './_attentive_eraser_cpp.mdx';
+import AttentiveEraserPython from './_attentive_eraser_python.mdx';
 
 ## Run Model Using OpenVINO GenAI
 
@@ -57,6 +59,33 @@ OpenVINO GenAI supports the following diffusion model pipelines:
             </TabItem>
         </Tabs>
     </TabItemJS>
+</LanguageTabs>
+
+### Attentive Eraser object removal
+
+Attentive Eraser is a prompt-free `InpaintingPipeline` mode for removing masked objects with SD1.5, SD2, and SDXL Base models. The primary prompt must be empty. `prompt_2` is used only by SDXL's second text encoder and must also be unset or empty. Negative prompts are unsupported, `guidance_scale` must be `1.0`, and `rm_guidance_scale` controls removal guidance.
+
+<LanguageTabs>
+    <TabItemPython>
+        <Tabs groupId="device">
+            <TabItem label="CPU" value="cpu">
+                <AttentiveEraserPython device="CPU" />
+            </TabItem>
+            <TabItem label="GPU" value="gpu">
+                <AttentiveEraserPython device="GPU" />
+            </TabItem>
+        </Tabs>
+    </TabItemPython>
+    <TabItemCpp>
+        <Tabs groupId="device">
+            <TabItem label="CPU" value="cpu">
+                <AttentiveEraserCPP device="CPU" />
+            </TabItem>
+            <TabItem label="GPU" value="gpu">
+                <AttentiveEraserCPP device="GPU" />
+            </TabItem>
+        </Tabs>
+    </TabItemCpp>
 </LanguageTabs>
 
 :::tip
