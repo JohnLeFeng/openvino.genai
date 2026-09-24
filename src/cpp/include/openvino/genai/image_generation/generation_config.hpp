@@ -76,12 +76,34 @@ private:
  * Attentive Eraser-specific generation controls.
  */
 struct OPENVINO_GENAI_EXPORTS AttentiveEraserConfig {
+    /** 
+     * Removal guidance applied between the unmasked and masked noise predictions. Must be positive.
+     */
     float rm_guidance_scale = 9.0f;
+
+    /**
+     * Last denoising step that applies softmax scaling, inclusive.
+     */
     size_t ss_steps = 9;
+
+    /**
+     * First denoising step that applies Attentive Eraser attention suppression, inclusive.
+     */
     size_t start_step = 0;
+    
+    /**
+     * Foreground softmax-logit scale. Must be in the range (0, 1].
+     */
     float ss_scale = 0.3f;
+    
+    /**
+     * Odd Gaussian mask-blur kernel size. Zero selects the model-family default.
+     */
     size_t mask_blur_kernel = 0;
 
+    /**
+     * Checks whether attentive eraser config is valid, otherwise throws an exception.
+     */
     void validate() const;
 };
 

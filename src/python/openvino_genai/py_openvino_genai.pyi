@@ -2179,7 +2179,10 @@ class Image2ImagePipeline:
     def set_scheduler(self, scheduler: Scheduler) -> None:
         ...
 class AttentiveEraserConfig:
-    """Runtime controls for SD1.5 Attentive Eraser generation."""
+    """Runtime controls for prompt-free SD1.5, SD2, and SDXL Attentive Eraser object removal.
+
+    The primary prompt must be empty. SDXL prompt_2 must be unset or empty; guidance_scale must be 1.0.
+    """
     def __init__(self) -> None:
         ...
     def validate(self) -> None:

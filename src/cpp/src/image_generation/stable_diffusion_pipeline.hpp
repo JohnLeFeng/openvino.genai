@@ -363,8 +363,7 @@ public:
         const bool is_attentive = m_use_attentive_eraser && m_pipeline_type == PipelineType::INPAINTING;
 
         if (is_attentive) {
-            OPENVINO_ASSERT(positive_prompt.empty(),
-                            "Attentive eraser mode requires an empty positive prompt");
+            validate_attentive_eraser_prompts(positive_prompt, generation_config);
             OPENVINO_ASSERT(generation_config.attentive_eraser.has_value(),
                             "ImageGenerationConfig.attentive_eraser must be set in attentive eraser mode");
             OPENVINO_ASSERT(generation_config.guidance_scale == 1.0f,
@@ -594,6 +593,14 @@ public:
     }
 
 protected:
+    static void validate_attentive_eraser_prompts(const std::string& positive_prompt,
+                                                  const ImageGenerationConfig& generation_config) {
+        OPENVINO_ASSERT(positive_prompt.empty(),
+                        "Attentive Eraser mode requires an empty positive prompt");
+        OPENVINO_ASSERT(!generation_config.prompt_2.has_value() || generation_config.prompt_2->empty(),
+                        "Attentive Eraser mode requires the SDXL prompt_2 to be empty");
+    }
+
     static bool is_attentive_eraser_aas_active(size_t inference_step,
                                                size_t start_step,
                                                float strength,

@@ -1,0 +1,28 @@
+import CodeBlock from '@theme/CodeBlock';
+
+<CodeBlock language="cpp" showLineNumbers>
+{`#include "openvino/genai/image_generation/inpainting_pipeline.hpp"
+#include "load_image.hpp"
+#include "imwrite.hpp"
+
+int main(int argc, char* argv[]) {
+    const std::string models_path = argv[1];
+    ov::Tensor source_image = utils::load_image(argv[2]);
+    ov::Tensor mask_image = utils::load_image(argv[3]);
+
+    ov::genai::InpaintingPipeline pipeline(
+        models_path,
+        "${props.device || 'CPU'}",
+        ov::genai::inpainting_mode(
+            ov::genai::InpaintingMode::ATTENTIVE_ERASER));
+    auto config = pipeline.get_generation_config();
+    config.guidance_scale = 1.0f;
+    config.attentive_eraser->rm_guidance_scale = 9.0f;
+    // prompt_2 is SDXL-only and must remain unset or empty in Attentive Eraser mode.
+    pipeline.set_generation_config(config);
+
+    ov::Tensor generated = pipeline.generate("", source_image, mask_image);
+    imwrite("object_removed_image.bmp", generated, true);
+}
+`}
+</CodeBlock>

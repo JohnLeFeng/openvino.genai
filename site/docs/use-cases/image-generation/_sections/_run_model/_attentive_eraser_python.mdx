@@ -1,0 +1,32 @@
+import CodeBlock from '@theme/CodeBlock';
+
+<CodeBlock language="python" showLineNumbers>
+{`import numpy as np
+import openvino as ov
+import openvino_genai as ov_genai
+from PIL import Image
+
+
+def read_image(path: str) -> ov.Tensor:
+    image = Image.open(path).convert("RGB")
+    return ov.Tensor(np.array(image)[None])
+
+
+source_image = read_image("source_image.png")
+mask_image = read_image("mask.png")
+
+pipeline = ov_genai.InpaintingPipeline(
+    model_path,
+    "${props.device || 'CPU'}",
+    inpainting_mode=ov_genai.InpaintingMode.ATTENTIVE_ERASER,
+)
+config = pipeline.get_generation_config()
+config.guidance_scale = 1.0
+config.attentive_eraser.rm_guidance_scale = 9.0
+# prompt_2 is SDXL-only and must remain unset or empty in Attentive Eraser mode.
+pipeline.set_generation_config(config)
+
+generated = pipeline.generate("", source_image, mask_image)
+Image.fromarray(generated.data[0]).save("object_removed_image.bmp")
+`}
+</CodeBlock>
