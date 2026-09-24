@@ -73,6 +73,41 @@ private:
 };
 
 /**
+ * Attentive Eraser-specific generation controls.
+ */
+struct OPENVINO_GENAI_EXPORTS AttentiveEraserConfig {
+    /** 
+     * Removal guidance applied between the unmasked and masked noise predictions. Must be positive.
+     */
+    float rm_guidance_scale = 9.0f;
+
+    /**
+     * Last denoising step that applies softmax scaling, inclusive.
+     */
+    size_t ss_steps = 9;
+
+    /**
+     * First denoising step that applies Attentive Eraser attention suppression, inclusive.
+     */
+    size_t start_step = 0;
+    
+    /**
+     * Foreground softmax-logit scale. Must be in the range (0, 1].
+     */
+    float ss_scale = 0.3f;
+    
+    /**
+     * Odd Gaussian mask-blur kernel size. Zero selects the model-family default.
+     */
+    size_t mask_blur_kernel = 0;
+
+    /**
+     * Checks whether attentive eraser config is valid, otherwise throws an exception.
+     */
+    void validate() const;
+};
+
+/**
  * Generation config used for Image generation pipelines.
  * Note, that not all values are applicable for all pipelines and models - please, refer
  * to documentation of properties below to understand a meaning and applicability for specific models.
@@ -127,6 +162,11 @@ struct OPENVINO_GENAI_EXPORTS ImageGenerationConfig {
      * TaylorSeer configuration for models
      */
     std::optional<TaylorSeerCacheConfig> taylorseer_config;
+
+    /**
+     * Attentive Eraser-specific controls. Must be set when using attentive inpainting mode.
+     */
+    std::optional<AttentiveEraserConfig> attentive_eraser;
 
     /**
      * Checks whether image generation config is valid, otherwise throws an exception.

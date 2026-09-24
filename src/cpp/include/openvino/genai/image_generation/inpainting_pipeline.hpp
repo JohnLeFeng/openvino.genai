@@ -31,13 +31,21 @@ class DiffusionPipeline;
 class Text2ImagePipeline;
 class Image2ImagePipeline;
 
+enum class InpaintingMode {
+    STANDARD,
+    ATTENTIVE_ERASER,
+};
+
+static constexpr ov::Property<InpaintingMode> inpainting_mode{"inpainting_mode"};
+
 //
 // Inpainting pipeline
 //
 
 class OPENVINO_GENAI_EXPORTS InpaintingPipeline {
 public:
-    explicit InpaintingPipeline(const std::filesystem::path& models_path);
+    explicit InpaintingPipeline(const std::filesystem::path& models_path,
+                                InpaintingMode mode = InpaintingMode::STANDARD);
 
     InpaintingPipeline(const std::filesystem::path& models_path, const std::string& device, const ov::AnyMap& properties = {});
 
@@ -148,8 +156,9 @@ public:
     }
 
     /**
-     * Inpaints an initial image within an area defined by mask and conditioned on prompt
-     * @param positive_prompt Prompt to generate image(s) from
+    * Inpaints an initial image within an area defined by mask and conditioned on prompt.
+    * Attentive Eraser mode is a prompt-free object-removal workflow and requires this prompt to be empty.
+    * @param positive_prompt Prompt to generate image(s) from, or an empty string in Attentive Eraser mode
      * @param initial_image RGB/BGR image of [1, height, width, 3] shape used to initialize latent image
      * @param mask_image RGB/BGR or GRAY/BINARY image of [1, height, width, 3 or 1] shape used as a mask
      * @param properties Image generation parameters specified as properties. Values in 'properties' override default value for generation parameters.

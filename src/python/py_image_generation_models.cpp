@@ -516,7 +516,7 @@ void init_unet2d_condition_model(py::module_& m) {
         .def("reshape", &ov::genai::UNet2DConditionModel::reshape, py::arg("batch_size"), py::arg("height"), py::arg("width"), py::arg("tokenizer_model_max_length"))
         .def("set_adapters", &ov::genai::UNet2DConditionModel::set_adapters, py::arg("adapters"))
         .def("infer", 
-            &ov::genai::UNet2DConditionModel::infer, 
+            py::overload_cast<ov::Tensor, ov::Tensor>(&ov::genai::UNet2DConditionModel::infer),
             py::call_guard<py::gil_scoped_release>(),
             py::arg("sample"), 
             py::arg("timestep"))

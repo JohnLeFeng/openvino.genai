@@ -13,6 +13,7 @@ There are several sample files:
  - [`image2image.cpp`](./image2image.cpp) demonstrates basic usage of the image to image pipeline
  - [`image2image_concurrency.cpp`](./image2image_concurrency.cpp) demonstrates concurrent usage of the image to image pipeline to create multiple images with different prompts
  - [`inpainting.cpp`](./inpainting.cpp) demonstrates basic usage of the inpainting pipeline
+ - [`attentive_eraser_pipeline.cpp`](./attentive_eraser_pipeline.cpp) demonstrates object removal with Attentive Eraser mode through the inpainting pipeline
  - [`benchmark_image_gen.cpp`](./benchmark_image_gen.cpp) demonstrates how to benchmark the text to image / image to image / inpainting pipeline
  - [`stable_diffusion_export_import.cpp`](./stable_diffusion_export_import.cpp) demonstrates how to export and import compiled models from/to the text to image pipeline. Only the Stable Diffusion XL model is supported.
 
@@ -247,6 +248,28 @@ The resulting image is:
    ![](./inpainting.bmp)
 
 Note, that LoRA, heterogeneous execution and other features of `Text2ImagePipeline` are applicable for `InpaintingPipeline`.
+
+## Run Attentive Eraser through the inpainting pipeline
+
+The `attentive_eraser_pipeline.cpp` sample uses the same `InpaintingPipeline` interface with `InpaintingMode::ATTENTIVE_ERASER`. It accepts ordinary SD1.5, SD2, and SDXL Base models and injects the AAS graph transformation before compiling the UNet. Pre-converted Attentive Eraser UNets are not supported.
+
+The UNet graph contract distinguishes SD1.5 (cross-attention width 768), SD2 (width 1024), and SDXL Base (width 2048 with `text_embeds` and `time_ids`). SD1.5 and SD2 both use 16 self-attention layers, the default AAS range `[7,16)`, and a 7-pixel mask blur kernel.
+
+Run it with a supported model, source image, and mask:
+
+```sh
+./attentive_eraser_pipeline <MODEL_DIR> <IMAGE> <MASK_IMAGE> [DEVICE] [SEED] [STEPS] [HEIGHT] [WIDTH]
+```
+
+For example:
+
+```sh
+./attentive_eraser_pipeline ./stable-diffusion-v1-5-ov source_image.png mask.png GPU 123
+```
+
+Attentive Eraser is a prompt-free object-removal workflow. The primary prompt must be empty. `prompt_2` is used only by SDXL's second text encoder and must also be unset or empty. Negative prompts are unsupported, and `guidance_scale` must be `1.0`. Use `rm_guidance_scale` in `AttentiveEraserConfig` to tune removal guidance. When `HEIGHT` or `WIDTH` is omitted, that dimension uses the model default. Explicit dimensions must be positive multiples of 8. A single compiled CPU or GPU pipeline with dynamic spatial inputs can process sequential calls with different square or rectangular dimensions; static model IRs remain restricted to their compiled dimensions. Attentive Eraser supports one output image per generation call.
+
+The pipeline resizes the source image and mask independently to the requested output dimensions. Gaussian blur, mask binarization, latent-mask max pooling, and AAS runtime input updates remain internal pipeline operations. The generated image is saved as `object_removed_image.bmp`.
 
 ## Benchmarking sample for image generation pipelines
 

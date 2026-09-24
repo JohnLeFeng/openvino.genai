@@ -11,6 +11,7 @@ There are several sample files:
  - [`encrypted_stable_diffusion.py`](./encrypted_stable_diffusion.py) demonstrates how to use the text to image pipeline with encrypted models and cache encryption callbacks
  - [`image2image.py`](./image2image.py) demonstrates basic usage of the image to image pipeline
  - [`inpainting.py`](./inpainting.py) demonstrates basic usage of the inpainting pipeline
+ - [`attentive_eraser_pipeline.py`](./attentive_eraser_pipeline.py) demonstrates object removal with Attentive Eraser mode through the inpainting pipeline
  - [`benchmark_image_gen.py`](./benchmark_image_gen.py) demonstrates how to benchmark the text to image / image to image / inpainting pipeline
  - [`stable_diffusion_export_import.py`](./stable_diffusion_export_import.py) demonstrates how to export and import compiled models in the text to image pipeline. Only the Stable Diffusion XL model is supported.
 
@@ -260,6 +261,30 @@ The resulting image is:
    ![](./../../cpp/image_generation/inpainting.bmp)
 
 Note, that LoRA, heterogeneous execution and other features of `Text2ImagePipeline` are applicable for `InpaintingPipeline`.
+
+## Run Attentive Eraser through the inpainting pipeline
+
+The `attentive_eraser_pipeline.py` sample enables `InpaintingMode.ATTENTIVE_ERASER` when constructing `InpaintingPipeline`. It supports ordinary SD1.5, SD2, and SDXL Base model directories; pre-converted Attentive Eraser UNets are not supported.
+
+```sh
+python attentive_eraser_pipeline.py <MODEL_DIR> <IMAGE> <MASK_IMAGE> [DEVICE] [SEED] [--height HEIGHT] [--width WIDTH] [--pipeline-shape {dynamic,static}]
+```
+
+Dynamic shape is the default:
+
+```sh
+python attentive_eraser_pipeline.py ./stable-diffusion-v1-5-ov source_image.png mask.png GPU 123 --height 512 --width 768
+```
+
+To reshape all pipeline components before compilation, select static shape and provide both dimensions:
+
+```sh
+python attentive_eraser_pipeline.py ./stable-diffusion-v1-5-ov source_image.png mask.png GPU 123 --height 512 --width 768 --pipeline-shape static
+```
+
+Attentive Eraser is a prompt-free object-removal workflow. The primary prompt must be empty. `prompt_2` is used only by SDXL's second text encoder and must also be unset or empty. Negative prompts are unsupported, and `guidance_scale` must be `1.0`. Use `rm_guidance_scale` in `AttentiveEraserConfig` to tune removal guidance. Dynamic mode allows either dimension to use the model default when omitted. Static mode requires both `--height` and `--width`. Explicit dimensions must be positive multiples of 8. Attentive Eraser supports one output image per generation call.
+
+The pipeline resizes the source image and mask independently to the requested output dimensions. Gaussian blur, mask binarization, and latent-mask max pooling remain internal pipeline operations. The generated image is saved as `object_removed_image.bmp`.
 
 ## benchmarking sample for image generation pipelines
 
