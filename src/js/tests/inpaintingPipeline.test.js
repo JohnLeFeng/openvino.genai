@@ -3,9 +3,11 @@
 
 import { describe, it, before } from "node:test";
 import os from "node:os";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import assert from "node:assert/strict";
 import { addon as ov } from "openvino-node";
-import { InpaintingPipeline } from "../dist/index.js";
+import { InpaintingMode, InpaintingPipeline } from "../dist/index.js";
 import { InpaintingPipeline as InpaintingPipelineClass } from "../dist/pipelines/inpaintingPipeline.js";
 import { createTestImageTensor } from "./utils.js";
 
@@ -26,7 +28,18 @@ function createBatchedTestImageTensor(height, width) {
   return tensor;
 }
 
+async function createFluxModelIndexFixture() {
+  const modelPath = await mkdtemp(join(os.tmpdir(), "genai-js-inpainting-"));
+  await writeFile(join(modelPath, "model_index.json"), '{"_class_name":"FluxPipeline"}');
+  return modelPath;
+}
+
 describe("InpaintingPipeline creation", () => {
+  it("exports InpaintingMode values matching the native enum", () => {
+    assert.strictEqual(InpaintingMode.STANDARD, 0);
+    assert.strictEqual(InpaintingMode.ATTENTIVE_ERASER, 1);
+  });
+
   it("InpaintingPipeline(modelPath, device) creates and initializes pipeline", async () => {
     const pipeline = await InpaintingPipeline(IMAGE_GENERATION_MODEL_PATH, "CPU");
     assert.ok(pipeline);
@@ -34,6 +47,32 @@ describe("InpaintingPipeline creation", () => {
     assert.strictEqual(typeof pipeline.getPerformanceMetrics, "function");
     assert.strictEqual(typeof pipeline.getGenerationConfig, "function");
     assert.strictEqual(typeof pipeline.setGenerationConfig, "function");
+  });
+
+  it("converts ATTENTIVE_ERASER before native model-support validation", async () => {
+    const modelPath = await createFluxModelIndexFixture();
+    try {
+      const properties = Object.fromEntries([["inpainting_mode", InpaintingMode.ATTENTIVE_ERASER]]);
+      await assert.rejects(
+        InpaintingPipeline(modelPath, "CPU", properties),
+        /Attentive Eraser mode supports only Stable Diffusion 1\.5, 2, and SDXL Base pipelines/,
+      );
+    } finally {
+      await rm(modelPath, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unknown inpainting mode values", async () => {
+    const modelPath = await createFluxModelIndexFixture();
+    try {
+      const properties = Object.fromEntries([["inpainting_mode", 2]]);
+      await assert.rejects(
+        InpaintingPipeline(modelPath, "CPU", properties),
+        /inpainting_mode must be STANDARD or ATTENTIVE_ERASER/,
+      );
+    } finally {
+      await rm(modelPath, { recursive: true, force: true });
+    }
   });
 });
 
@@ -198,6 +237,18 @@ describe("InpaintingPipeline methods", { skip: os.platform() === "darwin" }, () 
       pipeline.generate("a tiny robot", testImage, floatMask),
       /u8 element type/,
     );
+  });
+
+  it("setGenerationConfig(config) round-trips Attentive Eraser settings", () => {
+    const attentiveEraser = Object.fromEntries([
+      ["rm_guidance_scale", 7.5],
+      ["ss_steps", 6],
+      ["start_step", 2],
+      ["ss_scale", 0.5],
+      ["mask_blur_kernel", 3],
+    ]);
+    pipeline.setGenerationConfig(Object.fromEntries([["attentive_eraser", attentiveEraser]]));
+    assert.deepStrictEqual(pipeline.getGenerationConfig()["attentive_eraser"], attentiveEraser);
   });
 });
 
