@@ -29,6 +29,12 @@ export enum StopCriteria {
   NEVER,
 }
 
+/** Selects the behavior used by InpaintingPipeline. */
+export enum InpaintingMode {
+  STANDARD,
+  ATTENTIVE_ERASER,
+}
+
 /** Unsigned integer value represented as JS `number` whenever possible; if the value is too large for `number`, `bigint` is used.
  *
  * For size_t-like fields this corresponds to a maximum of `2^32 - 1` on 32-bit systems
@@ -549,13 +555,32 @@ export type ImageGenerationConfig = {
   max_sequence_length?: number;
   /** Strength parameter for img2img/inpainting-compatible configs. */
   strength?: number;
+  /** Attentive Eraser-specific controls used by InpaintingPipeline AE mode. */
+  attentive_eraser?: AttentiveEraserConfig;
+};
+
+/** Attentive Eraser-specific generation controls. Unspecified values use native defaults. */
+export type AttentiveEraserConfig = {
+  /** Removal guidance scale; must be positive. Defaults to 9.0. */
+  rm_guidance_scale?: number;
+  /** Last denoising step that applies softmax scaling. Defaults to 9. */
+  ss_steps?: Uint;
+  /** First denoising step that applies attention suppression. Defaults to 0. */
+  start_step?: Uint;
+  /** Foreground softmax-logit scale in (0, 1]. Defaults to 0.3. */
+  ss_scale?: number;
+  /** Odd Gaussian mask-blur kernel; zero selects the model default. Defaults to 0. */
+  mask_blur_kernel?: Uint;
 };
 
 export type Text2ImagePipelineProperties = Record<string, unknown>;
 
 export type Image2ImagePipelineProperties = Record<string, unknown>;
 
-export type InpaintingPipelineProperties = Record<string, unknown>;
+export type InpaintingPipelineProperties = {
+  /** Selects standard inpainting or Attentive Eraser mode. */
+  inpainting_mode?: InpaintingMode;
+} & Record<string, unknown>;
 
 /**
  * Callback for image generation, called once per denoising step.

@@ -11,6 +11,7 @@ import InpaintingPython from './_inpainting_python.mdx';
 import InpaintingJS from './_inpainting_js.mdx';
 import AttentiveEraserCPP from './_attentive_eraser_cpp.mdx';
 import AttentiveEraserPython from './_attentive_eraser_python.mdx';
+import AttentiveEraserJS from './_attentive_eraser_js.mdx';
 
 ## Run Model Using OpenVINO GenAI
 
@@ -156,6 +157,16 @@ Attentive Eraser is a prompt-free `InpaintingPipeline` mode for removing masked 
             </TabItem>
         </Tabs>
     </TabItemCpp>
+    <TabItemJS>
+        <Tabs groupId="device">
+            <TabItem label="CPU" value="cpu">
+                <AttentiveEraserJS device="CPU" />
+            </TabItem>
+            <TabItem label="GPU" value="gpu">
+                <AttentiveEraserJS device="GPU" />
+            </TabItem>
+        </Tabs>
+    </TabItemJS>
 </LanguageTabs>
 
 :::tip
