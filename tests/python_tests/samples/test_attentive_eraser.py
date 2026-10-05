@@ -73,9 +73,7 @@ class TestAttentiveEraser:
             ),
         ],
     )
-    def test_python_sample_configures_shape_before_compile(
-        self, monkeypatch, pipeline_shape, expected_calls
-    ):
+    def test_python_sample_configures_shape_before_compile(self, monkeypatch, pipeline_shape, expected_calls):
         sample = load_attentive_eraser_sample()
         calls = []
         constructor_args = []
@@ -125,9 +123,7 @@ class TestAttentiveEraser:
 
         sample.main()
 
-        assert constructor_args == [
-            ("model", sample.openvino_genai.InpaintingMode.ATTENTIVE_ERASER)
-        ]
+        assert constructor_args == [("model", sample.openvino_genai.InpaintingMode.ATTENTIVE_ERASER)]
         assert calls == expected_calls
 
     @pytest.mark.samples

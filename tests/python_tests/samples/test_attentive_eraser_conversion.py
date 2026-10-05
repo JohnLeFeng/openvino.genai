@@ -6,13 +6,7 @@ import torch
 
 
 def load_conversion_sample():
-    sample_path = (
-        Path(__file__).parents[3]
-        / "samples"
-        / "cpp"
-        / "image_generation"
-        / "atten_eraser_torch.py"
-    )
+    sample_path = Path(__file__).parents[3] / "samples" / "cpp" / "image_generation" / "atten_eraser_torch.py"
     spec = importlib.util.spec_from_file_location("atten_eraser_torch", sample_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -118,7 +112,9 @@ def test_aas_mask_keeps_native_softmax_static_rank():
     converted_model = ov.convert_model(traced_model)
     converted_model.reshape({converted_model.input(0): [1, 1, -1, -1], converted_model.input(1): [-1, -1, -1]})
 
-    softmax_operations = [operation for operation in converted_model.get_ops() if operation.get_type_name() == "Softmax"]
+    softmax_operations = [
+        operation for operation in converted_model.get_ops() if operation.get_type_name() == "Softmax"
+    ]
     assert len(softmax_operations) == 1
     assert softmax_operations[0].input_value(0).get_partial_shape().rank.is_static
     ov.Core().compile_model(converted_model, "CPU")
