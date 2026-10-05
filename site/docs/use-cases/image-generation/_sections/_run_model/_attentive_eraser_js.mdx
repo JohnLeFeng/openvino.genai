@@ -1,0 +1,22 @@
+import CodeBlock from '@theme/CodeBlock';
+
+<CodeBlock language="javascript" showLineNumbers>
+{`import { InpaintingMode, InpaintingPipeline } from "openvino-genai-node";
+import { readImage, saveAsBMP } from "../image_utils.js";
+
+const pipeline = await InpaintingPipeline(modelPath, "${props.device || 'CPU'}", {
+  inpainting_mode: InpaintingMode.ATTENTIVE_ERASER,
+});
+const config = pipeline.getGenerationConfig();
+config.guidance_scale = 1.0;
+config.attentive_eraser = {
+  rm_guidance_scale: 9.0,
+};
+pipeline.setGenerationConfig(config);
+
+const sourceImage = await readImage("source_image.png", { batched: true });
+const maskImage = await readImage("mask.png", { batched: true });
+const generated = await pipeline.generate("", sourceImage, maskImage);
+await saveAsBMP("object_removed_image.bmp", generated);
+`}
+</CodeBlock>

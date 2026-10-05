@@ -6,6 +6,7 @@ Sample files:
  - [`text2image.js`](./text2image.js) demonstrates basic usage of the `Text2ImagePipeline` (text-to-image) with a step callback and saves the result as a BMP file using `bmp-js`.
  - [`image2image.js`](./image2image.js) demonstrates basic usage of the `Image2ImagePipeline` (image-to-image): reads an input image (JPEG, PNG or BMP), runs the pipeline with a `strength` parameter and step callback, and saves the result as a BMP file using `bmp-js`.
  - [`inpainting.js`](./inpainting.js) demonstrates basic usage of the `InpaintingPipeline` (inpainting): reads an input image and a mask (JPEG, PNG or BMP), runs the pipeline with a step callback, and saves the result as a BMP file using `bmp-js`.
+ - [`attentive_eraser.js`](./attentive_eraser.js) demonstrates prompt-free masked object removal with `InpaintingPipeline` in Attentive Eraser mode. It supports exported Stable Diffusion 1.5, Stable Diffusion 2, and SDXL Base models.
  - [`denoising_process.js`](./denoising_process.js) demonstrates `Text2ImagePipeline.decode()`: from an asynchronous step callback it `await`s the decode of the latent at every denoising step and saves each intermediate image as a BMP file using `bmp-js`.
 
 Users can change the sample code and play with the following generation parameters:
@@ -89,6 +90,16 @@ And run the sample:
 The resulting image is:
 
    ![](./../../cpp/image_generation/inpainting.bmp)
+
+### Run Attentive Eraser object removal
+
+Attentive Eraser is prompt-free: the primary prompt must be empty, SDXL's `prompt_2` must be unset or empty, negative prompts are unsupported, and `guidance_scale` must be `1.0`. The `attentive_eraser` object controls removal guidance and related parameters.
+
+```bash
+node image_generation/attentive_eraser.js ./stable-diffusion-2-1-base image.png mask_image.png CPU
+```
+
+The result is saved as `object_removed_image.bmp`. Use a Stable Diffusion 1.5, Stable Diffusion 2, or SDXL Base export for Attentive Eraser mode.
 
 ### Run the denoising process sample
 

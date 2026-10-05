@@ -1289,11 +1289,7 @@ def create_evaluator(base_model, args):
             )
         elif task == "image-inpainting":
             if args.attentive_eraser:
-                gen_image_fn = (
-                    genai_gen_attentive_eraser
-                    if args.genai
-                    else diffusers_gen_attentive_eraser
-                )
+                gen_image_fn = genai_gen_attentive_eraser if args.genai else diffusers_gen_attentive_eraser
             else:
                 gen_image_fn = genai_gen_inpainting if args.genai else None
             return EvaluatorCLS(

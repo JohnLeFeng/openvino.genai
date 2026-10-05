@@ -757,9 +757,7 @@ def load_inpainting_genai_pipeline(model_dir, device="CPU", ov_config=None, atte
         pipeline_options["inpainting_mode"] = openvino_genai.InpaintingMode.ATTENTIVE_ERASER
 
     return GenAIModelWrapper(
-        openvino_genai.InpaintingPipeline(model_dir, device, **pipeline_options),
-        model_dir,
-        "image-inpainting"
+        openvino_genai.InpaintingPipeline(model_dir, device, **pipeline_options), model_dir, "image-inpainting"
     )
 
 
@@ -775,9 +773,7 @@ def load_inpainting_model(
         model_config = DiffusionPipeline.load_config(model_id)
         model_class = model_config.get("_class_name")
         if model_class != "StableDiffusionXLPipeline":
-            raise ValueError(
-                f"Attentive Eraser requires an SDXL Base model, got {model_class!r}"
-            )
+            raise ValueError(f"Attentive Eraser requires an SDXL Base model, got {model_class!r}")
 
     if use_hf:
         logger.info("Using HF Transformers API")

@@ -12,6 +12,7 @@
 #include "openvino/genai/llm_pipeline.hpp"
 #include "openvino/genai/automatic_speech_recognition/pipeline.hpp"
 #include "openvino/genai/image_generation/generation_config.hpp"
+#include "openvino/genai/image_generation/inpainting_pipeline.hpp"
 #include "openvino/genai/image_generation/image_generation_perf_metrics.hpp"
 #include "openvino/genai/rag/text_embedding_pipeline.hpp"
 #include "openvino/genai/rag/text_rerank_pipeline.hpp"

@@ -273,6 +273,39 @@ ov::AnyMap js_to_cpp<ov::AnyMap>(const Napi::Env& env, const Napi::Value& value)
         }
         if (key_name == JS_SCHEDULER_CONFIG_KEY) {
             result_map[CPP_SCHEDULER_CONFIG_KEY] = js_to_cpp<ov::genai::SchedulerConfig>(env, value_by_key);
+        } else if (key_name == "inpainting_mode") {
+            OPENVINO_ASSERT(value_by_key.IsNumber() && is_js_integer(env, value_by_key.As<Napi::Number>()),
+                            "inpainting_mode must be an integer enum value");
+            const int32_t mode = value_by_key.ToNumber().Int32Value();
+            OPENVINO_ASSERT(mode == static_cast<int32_t>(ov::genai::InpaintingMode::STANDARD) ||
+                                mode == static_cast<int32_t>(ov::genai::InpaintingMode::ATTENTIVE_ERASER),
+                            "inpainting_mode must be STANDARD or ATTENTIVE_ERASER");
+            result_map[key_name] = ov::genai::InpaintingMode(mode);
+        } else if (key_name == "attentive_eraser") {
+            OPENVINO_ASSERT(value_by_key.IsObject(), "attentive_eraser must be an object");
+            const auto config_object = value_by_key.As<Napi::Object>();
+            ov::genai::AttentiveEraserConfig config;
+            const auto rm_guidance_scale = config_object.Get("rm_guidance_scale");
+            if (!rm_guidance_scale.IsUndefined() && !rm_guidance_scale.IsNull()) {
+                config.rm_guidance_scale = js_to_cpp<float>(env, rm_guidance_scale);
+            }
+            const auto ss_steps = config_object.Get("ss_steps");
+            if (!ss_steps.IsUndefined() && !ss_steps.IsNull()) {
+                config.ss_steps = js_to_cpp<size_t>(env, ss_steps);
+            }
+            const auto start_step = config_object.Get("start_step");
+            if (!start_step.IsUndefined() && !start_step.IsNull()) {
+                config.start_step = js_to_cpp<size_t>(env, start_step);
+            }
+            const auto ss_scale = config_object.Get("ss_scale");
+            if (!ss_scale.IsUndefined() && !ss_scale.IsNull()) {
+                config.ss_scale = js_to_cpp<float>(env, ss_scale);
+            }
+            const auto mask_blur_kernel = config_object.Get("mask_blur_kernel");
+            if (!mask_blur_kernel.IsUndefined() && !mask_blur_kernel.IsNull()) {
+                config.mask_blur_kernel = js_to_cpp<size_t>(env, mask_blur_kernel);
+            }
+            result_map[key_name] = std::move(config);
         } else if (key_name == POOLING_TYPE_KEY) {
             result_map[key_name] = ov::genai::TextEmbeddingPipeline::PoolingType(value_by_key.ToNumber().Int32Value());
         } else if (key_name == STRUCTURED_OUTPUT_CONFIG_KEY) {
@@ -1592,6 +1625,22 @@ Napi::Value cpp_to_js<ov::genai::ImageGenerationConfig, Napi::Value>(
     obj.Set("num_inference_steps", cpp_to_js<size_t, Napi::Value>(env, config.num_inference_steps));
     obj.Set("max_sequence_length", cpp_to_js<int64_t, Napi::Value>(env, static_cast<int64_t>(config.max_sequence_length)));
     obj.Set("strength", cpp_to_js<float, Napi::Value>(env, config.strength));
+    if (config.attentive_eraser.has_value()) {
+        Napi::Object attentive_eraser = Napi::Object::New(env);
+        attentive_eraser.Set("rm_guidance_scale",
+                             cpp_to_js<float, Napi::Value>(env, config.attentive_eraser->rm_guidance_scale));
+        attentive_eraser.Set("ss_steps",
+                             cpp_to_js<size_t, Napi::Value>(env, config.attentive_eraser->ss_steps));
+        attentive_eraser.Set("start_step",
+                             cpp_to_js<size_t, Napi::Value>(env, config.attentive_eraser->start_step));
+        attentive_eraser.Set("ss_scale",
+                             cpp_to_js<float, Napi::Value>(env, config.attentive_eraser->ss_scale));
+        attentive_eraser.Set("mask_blur_kernel",
+                             cpp_to_js<size_t, Napi::Value>(env, config.attentive_eraser->mask_blur_kernel));
+        obj.Set("attentive_eraser", attentive_eraser);
+    } else {
+        obj.Set("attentive_eraser", env.Undefined());
+    }
 
     return obj;
 }

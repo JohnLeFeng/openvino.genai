@@ -426,21 +426,23 @@ def test_diffusers_attentive_eraser_generation_uses_fixed_sdxl_parameters():
     assert image.min().item() == 1.0
     assert image.max().item() == 1.0
     assert set(mask.unique().tolist()) <= {0.0, 1.0}
-    assert calls == [{
-        "prompt": "",
-        "num_inference_steps": 12,
-        "generator": generator,
-        "output_type": "pil",
-        "AAS": True,
-        "strength": 0.8,
-        "guidance_scale": 1.0,
-        "rm_guidance_scale": 9.0,
-        "ss_steps": 9,
-        "ss_scale": 0.3,
-        "AAS_start_step": 0,
-        "AAS_start_layer": 34,
-        "AAS_end_layer": 70,
-    }]
+    assert calls == [
+        {
+            "prompt": "",
+            "num_inference_steps": 12,
+            "generator": generator,
+            "output_type": "pil",
+            "AAS": True,
+            "strength": 0.8,
+            "guidance_scale": 1.0,
+            "rm_guidance_scale": 9.0,
+            "ss_steps": 9,
+            "ss_scale": 0.3,
+            "AAS_start_step": 0,
+            "AAS_start_layer": 34,
+            "AAS_end_layer": 70,
+        }
+    ]
 
 
 def test_genai_attentive_eraser_generation_uses_fixed_sdxl_parameters(monkeypatch):
